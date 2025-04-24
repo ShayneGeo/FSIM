@@ -30,13 +30,35 @@ st.write("## Simulation Overview")
 st.write("This app simulates how a fire spreads across a landscape. You can adjust wind speed, direction, moisture, and other settings. The background rasters represent slope and fuel types.")
 
 # --- Load rasters ---
+# @st.cache_data
+# def load_raster(url):
+#     with rasterio.open(url) as src:
+#         data = src.read(1, masked=True) if 'LC20' in url else src.read(1)
+#         transform = src.transform
+#         shape = src.shape
+#     return data, transform, shape
+import requests, tempfile, os
+
 @st.cache_data
 def load_raster(url):
-    with rasterio.open(url) as src:
-        data = src.read(1, masked=True) if 'LC20' in url else src.read(1)
+    if url.lower().startswith("http"):
+        r = requests.get(url)
+        r.raise_for_status()
+        tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
+        tmp.write(r.content)
+        tmp.flush()
+        path = tmp.name
+    else:
+        path = url
+
+    with rasterio.open(path) as src:
+        data      = src.read(1, masked=True) if 'LC20' in url else src.read(1)
         transform = src.transform
-        shape = src.shape
+        shape     = src.shape
+
+    # optionally clean up if you want: os.unlink(path)
     return data, transform, shape
+
 
 slope, _, _ = load_raster(slope_url)
 fuelmodel, transform, (rows, cols) = load_raster(fuel_url)
