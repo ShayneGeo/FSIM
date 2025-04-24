@@ -38,7 +38,7 @@ def load_raster(url):
         shape = src.shape
     return data, transform, shape
 
-slope, meta_transform, _ = load_raster(slope_url)
+slope, _, _ = load_raster(slope_url)
 fuelmodel, transform, (rows, cols) = load_raster(fuel_url)
 
 # Convert masked slope to array
@@ -67,22 +67,22 @@ else:
     ignition[cy, cx] = 1
 
 # Spread probability function
-def spread_prob(y,x,ny,nx):
-    fm = int(fuelmodel[ny,nx])
+def spread_prob(y, x, ny, nx):
+    fm = int(fuelmodel[ny, nx])
     fuel_mult  = FUEL_ROS[fm]
-    moist_mult = max(0,1-Dead_fuel_moisture/40)
-    beta       = np.deg2rad(slope[ny,nx])
-    slope_mult = min(1+5.275*np.tan(beta)**2,10)
+    moist_mult = max(0, 1 - DEAD_FUEL_MOISTURE/40)
+    beta       = np.deg2rad(slope[ny, nx])
+    slope_mult = min(1 + 5.275*np.tan(beta)**2, 10)
     ws = WIND_SPEED_CONST
     wd = np.deg2rad(WIND_DIR_CONST)
     wind_vec = np.array([np.cos(wd), np.sin(wd)])
-    dir_vec  = np.array([ny-y, nx-x])/np.hypot(ny-y,nx-x)
+    dir_vec  = np.array([ny-y, nx-x]) / np.hypot(ny-y, nx-x)
     wind_align = np.dot(wind_vec, dir_vec)
     wind_mult  = np.exp(0.3*ws*wind_align)
     ros = BASE_ROS * fuel_mult * moist_mult * slope_mult * wind_mult
-    dist = diag_len if (ny-y)*(nx-x)!=0 else CELL
-    prob = 1-np.exp(-ros*TIMESTEP_MIN/dist)
-    return np.clip(prob,0,1)
+    dist = diag_len if (ny-y)*(nx-x) != 0 else CELL
+    prob = 1 - np.exp(-ros*TIMESTEP_MIN/dist)
+    return np.clip(prob, 0, 1)
 
 # Run simulation
 burn = np.zeros((rows, cols), dtype=np.int8)
@@ -91,28 +91,32 @@ minutes = 0
 runs = []
 while np.any(burn==1) and minutes < MAX_MINUTES:
     new = burn.copy()
-    for y,x in zip(*np.where(burn==1)):
-        new[y,x] = 2
-        for dy,dx in neighbors:
+    for y, x in zip(*np.where(burn==1)):
+        new[y, x] = 2
+        for dy, dx in neighbors:
             ny, nx = y+dy, x+dx
-            if 0<=ny<rows and 0<=nx<cols and burn[ny,nx]==0:
-                if np.random.rand() < spread_prob(y,x,ny,nx): new[ny,nx]=1
+            if 0<=ny<rows and 0<=nx<cols and burn[ny, nx]==0:
+                if np.random.rand() < spread_prob(y, x, ny, nx):
+                    new[ny, nx] = 1
     burn = new
     minutes += TIMESTEP_MIN
     if minutes % TIMESTEP_MIN == 0:
         runs.append((minutes, burn.copy()))
 
 # Build arrival map
-arrival_map = np.full((rows,cols), np.nan)
-for i,(mins,b) in enumerate(runs):
+arrival_map = np.full((rows, cols), np.nan)
+for i, (mins, b) in enumerate(runs):
     mask = (b==2)
     arrival_map[mask & np.isnan(arrival_map)] = i+1
 
 # Compute extent with 5% buffer
-x_min = transform.c; x_max = transform.c + transform.a * cols
-y_max = transform.f; y_min = transform.f + transform.e * rows
-x_buf = (x_max-x_min)*0.05; y_buf = (y_max-y_min)*0.05
-extent = (x_min-x_buf, x_max+x_buf, y_min-y_buf, y_max+y_buf)
+x_min = transform.c
+x_max = transform.c + transform.a * cols
+y_max = transform.f
+y_min = transform.f + transform.e * rows
+x_buf = (x_max - x_min) * 0.05
+y_buf = (y_max - y_min) * 0.05
+extent = (x_min - x_buf, x_max + x_buf, y_min - y_buf, y_max + y_buf)
 
 # Plot results
 st.write("## Fire Arrival Time over Fuel Model")
@@ -121,9 +125,9 @@ ax.imshow(fuelmodel, cmap="gray_r", origin="upper", extent=extent)
 cmap = get_cmap("plasma", len(runs))
 im = ax.imshow(arrival_map, cmap=cmap, vmin=1, vmax=len(runs), origin="upper", alpha=0.75, extent=extent)
 ax.axis('off')
- cbar = fig.colorbar(im, ax=ax, ticks=np.arange(1,len(runs)+1))
- cbar.ax.set_yticklabels([f"{m} min" for m,_ in runs])
- cbar.set_label("Fire arrival time")
+cbar = fig.colorbar(im, ax=ax, ticks=np.arange(1, len(runs)+1))
+cbar.ax.set_yticklabels([f"{m} min" for m, _ in runs])
+cbar.set_label("Fire arrival time")
 st.pyplot(fig)
 
 st.write("---")
@@ -131,9 +135,9 @@ st.write("## Individual Time Steps")
 burn_cmap = ListedColormap(["white","orange","red"])
 burn_norm = BoundaryNorm([-0.5,0.5,1.5,2.5], burn_cmap.N)
 cols_sub = min(len(runs), 3)
-rows_sub = (len(runs)+cols_sub-1)//cols_sub
-fig2, axes = plt.subplots(rows_sub, cols_sub, figsize=(12,4*rows_sub))
-for idx,(mins,b) in enumerate(runs):
+rows_sub = (len(runs) + cols_sub - 1) // cols_sub
+fig2, axes = plt.subplots(rows_sub, cols_sub, figsize=(12, 4*rows_sub))
+for idx, (mins, b) in enumerate(runs):
     ax = axes.flatten()[idx]
     ax.imshow(b, cmap=burn_cmap, norm=burn_norm, origin="upper")
     ax.set_title(f"{mins} min")
