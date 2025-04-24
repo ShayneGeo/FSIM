@@ -200,6 +200,19 @@ run_sim = st.sidebar.button("Run Simulation")
 
 st.write("---")
 st.write("## Simulation Overview")
+st.write("# This simulation treats the landscape as a grid of tiny cells, 
+each with its own slope and vegetation type. We start by “lighting” a small ignition area in the center. 
+At each time step (e.g., every 10 minutes), the code looks at every burning cell and asks: 
+“Should the fire spread into each of my eight neighbors?” That decision is based on a simple physics-inspired rule: 
+we calculate a basic spread rate (the “base ROS”) and then boost it for cells with flammable fuel types, steep upslope, 
+and wind blowing in the right direction, while damping it if the fuel is too moist. We turn that rate into a probability, 
+so fire spreads faster (higher chance of igniting neighbors) under strong wind or dry, steep fuel, and spreads slower 
+under calm, wet, or flat conditions. Each cell that catches fire then moves from “burning” to “burned,” 
+and the process repeats until no cells are actively burning or we hit the time limit. By recording when each cell first burned, 
+we can make a “fire arrival” map that shows exactly how the blaze grew over time across the terrain.
+
+")
+
 st.write("This app simulates how a fire spreads across a landscape. Adjust settings then click ▶ Run Simulation.")
 
 @st.cache_data
@@ -296,8 +309,18 @@ if run_sim:
     im = ax.imshow(arrival_map, cmap=cmap, vmin=1, vmax=len(runs),
                    origin="upper", alpha=0.75, extent=extent)
     ax.axis('off')
-    cbar = fig.colorbar(im, ax=ax, ticks=np.arange(1, len(runs)+1))
-    cbar.ax.set_yticklabels([f"{m} min" for m, _ in runs])
+    #cbar = fig.colorbar(im, ax=ax, ticks=np.arange(1, len(runs)+1))
+    #cbar.ax.set_yticklabels([f"{m} min" for m, _ in runs])
+    # grab the indices for first and last
+    first_idx = 1
+    last_idx  = len(runs)
+    
+    # make the colorbar show only those two
+    cbar = fig.colorbar(im, ax=ax, ticks=[first_idx, last_idx])
+    cbar.ax.set_yticklabels([
+        f"{runs[0][0]} min",    # the very first minute value
+        f"{runs[-1][0]} min"    # the very last minute value
+    ])
     cbar.set_label("Fire arrival time")
     st.pyplot(fig)
 
