@@ -200,7 +200,8 @@ run_sim = st.sidebar.button("Run Simulation")
 
 st.write("---")
 st.write("## Simulation Overview")
-st.write("# This simulation treats the landscape as a grid of tiny cells, 
+st.write(""" 
+This simulation treats the landscape as a grid of tiny cells, 
 each with its own slope and vegetation type. We start by “lighting” a small ignition area in the center. 
 At each time step (e.g., every 10 minutes), the code looks at every burning cell and asks: 
 “Should the fire spread into each of my eight neighbors?” That decision is based on a simple physics-inspired rule: 
@@ -210,8 +211,7 @@ so fire spreads faster (higher chance of igniting neighbors) under strong wind o
 under calm, wet, or flat conditions. Each cell that catches fire then moves from “burning” to “burned,” 
 and the process repeats until no cells are actively burning or we hit the time limit. By recording when each cell first burned, 
 we can make a “fire arrival” map that shows exactly how the blaze grew over time across the terrain.
-
-")
+""")
 
 st.write("This app simulates how a fire spreads across a landscape. Adjust settings then click ▶ Run Simulation.")
 
