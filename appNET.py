@@ -1,39 +1,38 @@
-# =====================================================
-# 1.  TRAIN A SIMPLE SpreadNet WITH DUMMY DATA
-# =====================================================
-import tensorflow as tf, numpy as np, random, os, warnings
-warnings.filterwarnings("ignore")
+# Train and Save TensorFlow SpreadNet
+import tensorflow as tf, numpy as np, random, os
 
 def build_spreadnet():
-    model = tf.keras.Sequential([
+    return tf.keras.Sequential([
         tf.keras.layers.Input(shape=(9,)),
-        tf.keras.layers.Dense(32, activation="relu"),
-        tf.keras.layers.Dense(16, activation="relu"),
-        tf.keras.layers.Dense(1,  activation="sigmoid")
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(16, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
     ])
-    return model
 
 def make_sample():
-    fuel = random.choices([0,1,2],[0.4,0.4,0.2])[0]
-    fuel_onehot = [int(fuel==i) for i in range(3)]
-    slope = random.uniform(0,60)
-    moist = random.uniform(0,40)
-    wind  = random.uniform(0,30)
-    align = random.uniform(0,1)
-    dist  = random.choice([0,1])
+    fuel = random.choice([0, 1, 2])
+    fuel_onehot = [int(fuel == i) for i in range(3)]
+    slope = random.uniform(0, 60)
+    moist = random.uniform(0, 40)
+    wind = random.uniform(0, 30)
+    align = random.uniform(0, 1)
+    dist = random.choice([0, 1])
     x = fuel_onehot + [slope/60, moist/40, wind/30, align, dist]
-    fuel_mult = [0.3,0.6,0.9][fuel]
-    prob = fuel_mult*(1-moist/40)*(0.3+0.7*align)*(0.2+0.8*wind/30)
-    y = 1 if prob>0.3 else 0
-    return x,y
+    # Simple rule to determine spread (1) or not (0)
+    fuel_mult = [0.3, 0.6, 0.9][fuel]
+    prob = fuel_mult * (1 - moist/40) * (0.2 + 0.8 * wind/30) * (0.3 + 0.7 * align)
+    y = 1 if prob > 0.3 else 0
+    return x, y
 
-X,Y=zip(*(make_sample() for _ in range(60000)))
-X,Y=np.array(X,dtype="float32"),np.array(Y,dtype="float32")
-model=build_spreadnet()
-model.compile(optimizer="adam",loss="binary_crossentropy",metrics=["accuracy"])
-model.fit(X,Y,epochs=5,batch_size=4096,verbose=0)
+X, Y = zip(*[make_sample() for _ in range(60000)])
+X = np.array(X, dtype='float32')
+Y = np.array(Y, dtype='float32')
+
+model = build_spreadnet()
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.fit(X, Y, epochs=5, batch_size=2048, verbose=1)
 model.save_weights("spread_nn_tf.h5")
-print("✅  Dummy SpreadNet trained & saved\n")
+print("✅ TensorFlow SpreadNet trained and saved as 'spread_nn_tf.h5'")
 
 # =====================================================
 # 2.  STREAMLIT FIRE‑SPREAD SIM USING THAT MODEL
