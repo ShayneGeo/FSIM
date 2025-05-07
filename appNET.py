@@ -728,7 +728,17 @@ st.title("🔥 SpreadNet")
 st.write("""
 ### How it works
 
-SpreadNet replaces  equations with a trained neural network to decide if fire spreads to a neighboring cell.
+SpreadNet is a neural-network–driven cellular-automaton model that predicts wildfire spread probabilities 
+for each neighboring cell based on fuel type, slope, moisture, wind speed, wind alignment, and distance.
+
+SpreadNet replaces CA equations with a trained neural network to decide if fire spreads to a neighboring cell.
+
+its  awhat built on what
+
+
+ChatGPT said:
+SpreadNet is a hybrid model built on a CA framework but 
+replaces traditional fire-spread equations with a neural network trained to predict the probability of fire spread between adjacent cells.
 
 At each time step, for each unburned neighbor, the model takes in:
 
