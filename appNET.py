@@ -733,13 +733,6 @@ for each neighboring cell based on fuel type, slope, moisture, wind speed, wind 
 
 SpreadNet replaces CA equations with a trained neural network to decide if fire spreads to a neighboring cell.
 
-its  awhat built on what
-
-
-ChatGPT said:
-SpreadNet is a hybrid model built on a CA framework but 
-replaces traditional fire-spread equations with a neural network trained to predict the probability of fire spread between adjacent cells.
-
 At each time step, for each unburned neighbor, the model takes in:
 
 - Fuel type embedding values
@@ -755,10 +748,30 @@ Instead of computing:
 
     P(spread) = 1 - exp(-ROS × Δt / d)
 
-SpreadNet **learns** spread probability directly from data by asking:
 
-> “Given these inputs, should the fire spread here?”
+SpreadNet **learns** the probability of fire spread directly from data by asking:
 
+    “Given these inputs, should the fire spread here?”
+
+This is done by training a neural network to approximate the spread probability:
+
+    P(spread) = σ(W₂ · ReLU(W₁ · x + b₁) + b₂)
+
+Where:
+- x is the input feature vector, including:
+    - fuel type,
+    - normalized slope,
+    - normalized moisture,
+    - normalized wind speed,
+    - wind alignment (cos(θ)),
+    - and a distance flag (0 = straight, 1 = diagonal)
+- σ is the sigmoid activation function converting logits to probability,
+- W₁, W₂ and b₁, b₂ are the model's learned weights and biases.
+
+Rather than using physics-based equations, SpreadNet learns a nonlinear decision surface
+from training data that maps environmental conditions to the probability of spread.
+
+            
 ---
 
 ### 🌬️ Wind in the Model
