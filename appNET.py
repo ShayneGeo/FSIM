@@ -751,13 +751,57 @@ if st.button("Run Simulation"):
         CELL, DIAG = transform.a, transform.a * math.sqrt(2)
 
         # ------------------- TRAIN DUMMY NET -------------
-        rnd_X = np.random.rand(60000,8).astype('float32')
-        rnd_Y = np.random.randint(0,2,60000).astype('float32')
-        tf.keras.backend.clear_session()          # ← reset graph so reruns are clean
+        #rnd_X = np.random.rand(60000,8).astype('float32')
+        #rnd_Y = np.random.randint(0,2,60000).astype('float32')
+        
+        # tf.keras.backend.clear_session()          # ← reset graph so reruns are clean
 
-        net = build_spreadnet()
-        net.compile(optimizer='adam', loss='binary_crossentropy')
-        net.fit(rnd_X, rnd_Y, epochs=1, batch_size=2048, verbose=0)
+        # net = build_spreadnet()
+        # net.compile(optimizer='adam', loss='binary_crossentropy')
+        # net.fit(rnd_X, rnd_Y, epochs=1, batch_size=2048, verbose=0)
+
+        # ---------- TRAIN DUMMY NET (wind-aware) ----------
+
+            
+
+
+def make_sample(label):
+    fuel_code = random.choice(VALID_FUELS)
+    fuel_emb  = FUEL_EMB[fuel_code]
+
+    if label:   # spread
+        slope = random.uniform(30, 60)
+        moist = random.uniform(0, 8)
+        wind  = random.uniform(8, 30)
+        align = random.uniform(0.5, 1.0)      # tail-wind
+    else:       # no-spread
+        slope = random.uniform(0, 15)
+        moist = random.uniform(25, 40)
+        wind  = random.uniform(0, 10)
+        align = random.uniform(-1.0, -0.3)    # head-wind
+
+    dist = random.choice([0, 1])
+    x = fuel_emb + [slope/60, moist/40, wind/30, align, dist]
+    return x, label
+
+def generate_balanced_samples(n=60_000, seed=42):
+    random.seed(seed); np.random.seed(seed)
+    half = n // 2
+    data = [make_sample(1) for _ in range(half)] + \
+           [make_sample(0) for _ in range(half)]
+    random.shuffle(data)
+    X, Y = zip(*data)
+    return np.array(X, 'float32'), np.array(Y, 'float32')
+
+# clear previous graph each rerun
+tf.keras.backend.clear_session()
+
+net = build_spreadnet()
+net.compile(optimizer='adam', loss='binary_crossentropy')
+
+X_train, y_train = generate_balanced_samples()
+net.fit(X_train, y_train, epochs=5, batch_size=2048, verbose=0)
+
 
         # ------------------- SIMULATION ------------------
         burn = np.zeros((rows,cols), np.int8)
