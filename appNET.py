@@ -768,7 +768,7 @@ Where:
 - σ is the sigmoid activation function converting logits to probability,
 - W₁, W₂ and b₁, b₂ are the model's learned weights and biases.
 
-Rather than using physics-based equations, SpreadNet learns a nonlinear decision surface
+Rather than using rule-based equations, SpreadNet learns a nonlinear decision surface
 from training data that maps environmental conditions to the probability of spread.
 
             
