@@ -661,17 +661,16 @@
 
 #!/usr/bin/env python
 # -------------------------------------------------
-# SpreadNet Fire-Spread Streamlit App
+# SpreadNet Fire-Spread Streamlit App (robust)
 # -------------------------------------------------
-import streamlit as st
-import tensorflow as tf
-import numpy as np
-import random, math, rasterio, tempfile, requests, os
+import streamlit as st, tensorflow as tf, numpy as np, rasterio, requests, tempfile, os, math, random
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
 from collections import defaultdict
 
-# ---------- constants ----------
+# -------------------------------------------------------------------
+# CONSTANTS
+# -------------------------------------------------------------------
 DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
 DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
 
@@ -685,7 +684,46 @@ FUEL_EMB = defaultdict(lambda:[0,0,0], {
 })
 NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
 
-# ---------- app UI ----------
+# -------------------------------------------------------------------
+# MINI-UTILS
+# -------------------------------------------------------------------
+def download_tif(url: str) -> str:
+    """Download `url` to a temp *.tif file and return the path."""
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+    for chunk in r.iter_content(1024 * 1024):
+        tmp.write(chunk)
+    tmp.close()
+    # quick sanity-check: can rasterio open it?
+    try:
+        with rasterio.open(tmp.name):
+            pass
+    except Exception:
+        os.remove(tmp.name)
+        raise RuntimeError(f"Downloaded file from {url} is not a readable GeoTIFF.")
+    return tmp.name
+
+def load_raster(path):
+    with rasterio.open(path) as src:
+        arr = src.read(1, masked=True)
+        return np.nan_to_num(arr.filled(0)), src.transform, src.shape
+
+def build_spreadnet():
+    return tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(8,)),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(16, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+
+def wind_align(a,b): return math.cos(math.radians(a - b))
+def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
+def predict(net, feats): return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
+
+# -------------------------------------------------------------------
+# STREAMLIT UI
+# -------------------------------------------------------------------
 st.title("🔥 SpreadNet Fire-Spread Simulation")
 
 MOIST_GLOBAL = st.slider("Global Moisture (%)", 0.0, 40.0, 1.0, .1)
@@ -696,107 +734,79 @@ MAX_SIM_MIN  = st.slider("Max Simulation Time (min)", 60, 5000, 2240, 10)
 
 if st.button("Run Simulation"):
 
-    # ---------- helper fns ----------
-    @st.cache_data(show_spinner=False)
-    def download(url):
-        r = requests.get(url, stream=True); r.raise_for_status()
-        f = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-        for chunk in r.iter_content(1024*1024):
-            f.write(chunk)
-        f.close(); return f.name
-
-    def load_raster(path):
-        with rasterio.open(path) as src:
-            arr = src.read(1, masked=True)
-            data = np.nan_to_num(arr.filled(0))
-            return data, src.transform, src.shape
-
-    def build_spreadnet():
-        return tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(8,)),
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dense(16, activation='relu'),
-            tf.keras.layers.Dense(1,  activation='sigmoid')
-        ])
-
-    def wind_align(a,b): return math.cos(math.radians(a-b))
-    def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
-    def predict(net, feats): return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
-
-    # ---------- download rasters ----------
-    with st.spinner("Downloading rasters…"):
-        slope_path = download(DEFAULT_SLOPE_URL)
-        fuel_path  = download(DEFAULT_FUEL_URL)
-
+    slope_path, fuel_path = None, None
     try:
-        # ---------- prepare data ----------
-        with st.spinner("Preparing rasters…"):
-            slope, transform, (rows, cols) = load_raster(slope_path)
-            fuel , _        , _            = load_raster(fuel_path)
+        # ------------------- DOWNLOAD -------------------
+        with st.spinner("Downloading rasters…"):
+            slope_path = download_tif(DEFAULT_SLOPE_URL)
+            fuel_path  = download_tif(DEFAULT_FUEL_URL)
 
-            if slope.max() > 90:
-                slope = np.degrees(np.arctan(slope / 100))
-            slope = np.clip(slope, 0, 60)
-            CELL, DIAG = transform.a, transform.a*math.sqrt(2)
+        # ------------------- PREP DATA -------------------
+        slope, transform, (rows, cols) = load_raster(slope_path)
+        fuel , _        , _            = load_raster(fuel_path)
 
-        # ---------- train dummy SpreadNet ----------
-        with st.spinner("Training SpreadNet…"):
-            rand_X = np.random.rand(60000,8).astype('float32')
-            rand_Y = np.random.randint(0,2,60000).astype('float32')
-            net = build_spreadnet()
-            net.compile(optimizer='adam', loss='binary_crossentropy')
-            net.fit(rand_X, rand_Y, epochs=1, batch_size=2048, verbose=0)
+        if slope.max() > 90:
+            slope = np.degrees(np.arctan(slope / 100))
+        slope = np.clip(slope, 0, 60)
+        CELL, DIAG = transform.a, transform.a * math.sqrt(2)
 
-        # ---------- run cellular automaton ----------
-        with st.spinner("Running simulation…"):
-            burn = np.zeros((rows,cols), np.int8)
-            burn[rows//2, cols//2] = 1
-            minutes, runs = 0, []
+        # ------------------- TRAIN DUMMY NET -------------
+        rnd_X = np.random.rand(60000,8).astype('float32')
+        rnd_Y = np.random.randint(0,2,60000).astype('float32')
+        net = build_spreadnet()
+        net.compile(optimizer='adam', loss='binary_crossentropy')
+        net.fit(rnd_X, rnd_Y, epochs=1, batch_size=2048, verbose=0)
 
-            while burn.any() and minutes < MAX_SIM_MIN:
-                new, feats, cells = burn.copy(), [], []
-                for y,x in zip(*np.where(burn==1)):
-                    new[y,x] = 2
-                    for dy,dx in NEIGH:
-                        ny,nx = y+dy, x+dx
-                        if not(0<=ny<rows and 0<=nx<cols): continue
-                        if burn[ny,nx] != 0 or fuel[ny,nx] in [93,98,99]: continue
-                        feats.append(FUEL_EMB[int(fuel[ny,nx])] + [
-                            slope[ny,nx]/60, MOIST_GLOBAL/40, WIND_SPEED/30,
-                            wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
-                            (DIAG if dy*dx else CELL)/DIAG])
-                        cells.append((ny,nx))
-                if feats:
-                    probs = predict(net, feats)
-                    for (ny,nx),p in zip(cells, probs):
-                        if random.random() < p: new[ny,nx] = 1
-                burn, minutes = new, minutes+STEP_MIN
-                runs.append((minutes,burn.copy()))
+        # ------------------- SIMULATION ------------------
+        burn = np.zeros((rows,cols), np.int8)
+        burn[rows//2, cols//2] = 1
+        minutes, runs = 0, []
 
-        # ---------- arrival map ----------
+        while burn.any() and minutes < MAX_SIM_MIN:
+            new, feats, cells = burn.copy(), [], []
+            for y,x in zip(*np.where(burn==1)):
+                new[y,x] = 2
+                for dy,dx in NEIGH:
+                    ny,nx = y+dy, x+dx
+                    if not(0<=ny<rows and 0<=nx<cols): continue
+                    if burn[ny,nx] != 0 or fuel[ny,nx] in [93,98,99]: continue
+                    feats.append(FUEL_EMB[int(fuel[ny,nx])] + [
+                        slope[ny,nx]/60, MOIST_GLOBAL/40, WIND_SPEED/30,
+                        wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
+                        (DIAG if dy*dx else CELL)/DIAG])
+                    cells.append((ny,nx))
+            if feats:
+                probs = predict(net, feats)
+                for (ny,nx),p in zip(cells, probs):
+                    if random.random() < p: new[ny,nx] = 1
+            burn, minutes = new, minutes + STEP_MIN
+            runs.append((minutes, burn.copy()))
+
+        # ------------------- ARRIVAL MAP -----------------
         arrival = np.full((rows,cols), np.nan)
         for i,(_,b) in enumerate(runs):
-            arrival[(b==2) & np.isnan(arrival)] = i+1
+            arrival[(b==2) & np.isnan(arrival)] = i + 1
 
-        # ---------- plot ----------
-        xmin,xmax = transform.c, transform.c+CELL*cols
-        ymin,ymax = transform.f+transform.e*rows, transform.f
-        fig,ax = plt.subplots(figsize=(8,8))
+        # ------------------- PLOT ------------------------
+        xmin,xmax = transform.c, transform.c + CELL * cols
+        ymin,ymax = transform.f + transform.e * rows, transform.f
+        fig, ax = plt.subplots(figsize=(8,8))
         ax.imshow(fuel, cmap='gray_r',
                   extent=[xmin,xmax,ymin,ymax], origin='upper')
-        im = ax.imshow(arrival, cmap=get_cmap('plasma',len(runs)),
+        im = ax.imshow(arrival, cmap=get_cmap('plasma', len(runs)),
                        extent=[xmin,xmax,ymin,ymax], origin='upper',
                        vmin=1, vmax=len(runs), alpha=.75)
         ax.set_title("Fire Arrival Time (min)")
         ax.axis('off')
-        cbar = fig.colorbar(im, ax=ax, ticks=[1,len(runs)])
+        cbar = fig.colorbar(im, ax=ax, ticks=[1, len(runs)])
         cbar.ax.set_yticklabels([f"{runs[0][0]} min", f"{runs[-1][0]} min"])
         st.pyplot(fig)
         st.success("Simulation complete!")
 
     finally:
-                print("HELLOWORLD")
-        # for p in [slope_path, fuel_path]:
-        #     try: os.remove(p)
-        #     except: pass
+        # always clean up downloaded temp files
+        for p in (slope_path, fuel_path):
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except: pass
 
