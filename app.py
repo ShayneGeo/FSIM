@@ -200,6 +200,19 @@ run_sim = st.sidebar.button("Run Simulation")
 
 st.write("---")
 st.write("## Simulation Overview")
+# st.write(""" 
+# This simulation treats the landscape as a grid of cells, 
+# each with its own slope and vegetation type. We start by 'lighting' a small ignition area in the center. 
+# At each time step (e.g., every 10 minutes), the code looks at every burning cell and asks: 
+# 'Should the fire spread into each of my eight neighbors?' That decision is based on a simple physics-inspired rule: 
+# we calculate a basic spread rate (the 'base ROS') and then boost it for cells with flammable fuel types, steep upslope, 
+# and wind blowing in the right direction, while damping it if the fuel is too moist. We turn that rate into a probability, 
+# so fire spreads faster (higher chance of igniting neighbors) under strong wind or dry, steep fuel, and spreads slower 
+# under calm, wet, or flat conditions. Each cell that catches fire then moves from burning to burned, 
+# and the process repeats until no cells are actively burning or we hit the time limit. By recording when each cell first burned, 
+# we can make a fire arrival map that shows exactly how the blaze grew over time across the terrain.
+# """)
+
 st.write(""" 
 This simulation treats the landscape as a grid of cells, 
 each with its own slope and vegetation type. We start by 'lighting' a small ignition area in the center. 
@@ -211,7 +224,30 @@ so fire spreads faster (higher chance of igniting neighbors) under strong wind o
 under calm, wet, or flat conditions. Each cell that catches fire then moves from burning to burned, 
 and the process repeats until no cells are actively burning or we hit the time limit. By recording when each cell first burned, 
 we can make a fire arrival map that shows exactly how the blaze grew over time across the terrain.
+
+To decide if fire spreads from one cell to a neighbor, we use the following equation:
+
+    P(spread) = 1 - exp(-ROS × Δt / d)
+
+Where:
+- **P(spread)** is the probability the fire spreads to a neighboring cell.
+- **ROS** is the rate of spread, calculated as:
+  
+      ROS = Base_ROS × FuelMult × MoistureMult × SlopeMult × WindMult
+
+- **Δt** is the time step (in minutes).
+- **d** is the distance between the cells (either straight or diagonal).
+
+Each multiplier adjusts the spread rate based on:
+- **Fuel type** (flammability)
+- **Dead fuel moisture** (dampness reduces spread)
+- **Slope** (upslope accelerates fire)
+- **Wind alignment** (fire spreads faster when wind supports its direction)
+
+This probabilistic approach allows the simulation to reflect variable fire behavior while maintaining physical realism.
 """)
+
+
 
 st.write("Adjust settings then click ▶ Run Simulation.")
 
