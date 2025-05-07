@@ -516,7 +516,6 @@
 #     else:
 #         st.error("Please upload both slope and fuel raster files.")
 
-
 import streamlit as st
 import tensorflow as tf
 import numpy as np
@@ -530,28 +529,35 @@ import tempfile
 import requests
 import os
 
-def download(url):
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-    f = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-    for chunk in r.iter_content(1024 * 1024):
-        f.write(chunk)
-    f.close()
-    return f.name
+# ------------ constants ------------ #
+DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13,98,93]
+FUEL_EMB = defaultdict(lambda:[0,0,0], {
+    1:[1,0,0],2:[1,0,0],3:[1,0,0],
+    4:[0,1,0],5:[0,1,0],6:[0,1,0],
+    7:[0,0,1],8:[0,0,1],9:[0,0,1],
+    10:[.5,.5,0],11:[0,.5,.5],
+    12:[.5,0,.5],13:[.7,.3,0]
+})
+NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
 
-def load_raster(path, mask_zero=False):
+# ------------ helpers ------------ #
+def download(url):
+    r = requests.get(url, stream=True); r.raise_for_status()
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+    for chunk in r.iter_content(1024*1024):
+        f.write(chunk)
+    f.close(); return f.name
+
+def load_raster(path):
     with rasterio.open(path) as src:
         arr = src.read(1, masked=True)
         data = np.nan_to_num(arr.filled(0))
-        if mask_zero:
-            data[data == 0] = np.nan
         return data, src.transform, src.shape
 
-def wind_align_deg(dir_from, dir_to):
-    return math.cos(math.radians(dir_from - dir_to))
-
-def direction_deg(y, x, ny, nx):
-    return math.degrees(math.atan2(nx - x, ny - y)) % 360
+def wind_align(a,b): return math.cos(math.radians(a-b))
+def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
 
 def build_spreadnet():
     return tf.keras.Sequential([
@@ -561,169 +567,85 @@ def build_spreadnet():
         tf.keras.layers.Dense(1, activation='sigmoid')
     ])
 
-def make_sample(label, valid_fuels, fuel_emb):
-    fuel_code = random.choice(valid_fuels)
-    emb = fuel_emb[fuel_code]
-    if label == 1:
-        slope = random.uniform(30, 60)
-        moist = random.uniform(0, 8)
-        wind  = random.uniform(8, 30)
-        align = random.uniform(0.5, 1.0)
-    else:
-        slope = random.uniform(0, 15)
-        moist = random.uniform(25, 40)
-        wind  = random.uniform(0, 10)
-        align = random.uniform(-1.0, -0.3)
-    dist = random.choice([0, 1])
-    return emb + [slope/60, moist/40, wind/30, align, dist], label
+def predict(net, feats):
+    return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
 
-def generate_balanced_samples(n, seed, valid_fuels, fuel_emb):
-    random.seed(seed); np.random.seed(seed)
-    half = n // 2
-    data = [make_sample(1, valid_fuels, fuel_emb) for _ in range(half)] + \
-           [make_sample(0, valid_fuels, fuel_emb) for _ in range(half)]
-    random.shuffle(data)
-    X, Y = zip(*data)
-    return np.array(X, 'float32'), np.array(Y, 'float32')
+# ------------ UI ------------ #
+st.title("🔥 SpreadNet Fire-Spread Simulation")
 
-def predict_prob_batch(net, feats):
-    return net(np.asarray(feats, 'float32'), training=False).numpy().ravel()
+MOIST_GLOBAL = st.slider("Global Moisture (%)", 0.0, 40.0, 1.0, 0.1)
+WIND_SPEED   = st.slider("Wind Speed (m/s)",    0.0, 30.0, 10.0, 0.1)
+WIND_DIR_DEG = st.slider("Wind Direction (°)",      0, 359, 250, 1)
+STEP_MIN     = st.slider("Time Step (min)",         1, 60, 10, 1)
+MAX_SIM_MIN  = st.slider("Max Simulation Time (min)", 60, 5000, 2240, 10)
 
-# --- Streamlit UI ---
-st.title("🔥 SpreadNet Fire Spread Simulation")
-st.write("""
-### Overview
-SpreadNet replaces hand-crafted equations with a trained neural network to decide if fire spreads to a neighboring cell.
-""")
+if st.button("Run Simulation"):
+    with st.spinner("Downloading rasters..."):
+        slope_path = download(DEFAULT_SLOPE_URL)
+        fuel_path  = download(DEFAULT_FUEL_URL)
 
-# Parameters
-MOIST_GLOBAL = st.slider("Global Moisture (%)",       0.0, 40.0, 1.0, step=0.1)
-WIND_SPEED   = st.slider("Wind Speed (m/s)",          0.0, 30.0, 10.0, step=0.1)
-WIND_DIR_DEG = st.slider("Wind Direction (° from N)",    0, 360, 250, step=1)
-STEP_MIN     = st.slider("Simulation Time Step (min)",   1,   60,   10, step=1)
-MAX_SIM_MIN  = st.slider("Max Simulation Time (min)",   60, 5000, 2240, step=10)
+    try:
+        with st.spinner("Preparing data..."):
+            slope, transform, (rows, cols) = load_raster(slope_path)
+            fuel , _        , _            = load_raster(fuel_path)
 
-# File upload (optional)
-st.markdown("Upload slope and fuel rasters (optional):")
-slope_file = st.file_uploader("Slope Raster (TIFF)",      type=["tif", "tiff"])
-fuel_file  = st.file_uploader("Fuel Model Raster (TIFF)", type=["tif", "tiff"])
+            if slope.max() > 90:
+                slope = np.degrees(np.arctan(slope / 100))
+            slope = np.clip(slope, 0, 60)
+            CELL, DIAG = transform.a, transform.a*math.sqrt(2)
 
-# Fallback URLs
-DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
-DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
-slope_url = st.sidebar.text_input("Slope raster URL",      DEFAULT_SLOPE_URL)
-fuel_url  = st.sidebar.text_input("Fuel model raster URL", DEFAULT_FUEL_URL)
+            net = build_spreadnet()
+            net.compile(optimizer='adam', loss='binary_crossentropy')
+            net.fit(np.random.rand(1000,8).astype('float32'),
+                    np.random.randint(0,2,1000).astype('float32'),
+                    epochs=1, batch_size=128, verbose=0)
 
-# Hyper-parameters
-N_SAMPLES  = 60000
-EPOCHS     = 5
-BATCH_SIZE = 2048
-SEED       = 42
+        with st.spinner("Running cellular-automaton simulation..."):
+            burn = np.zeros((rows,cols), np.int8)
+            burn[rows//2, cols//2] = 1
+            minutes, runs = 0, []
 
-# Fuel embedding and neighbors
-FUEL_EMB    = defaultdict(lambda: [0,0,0], {
-    1:[1,0,0],2:[1,0,0],3:[1,0,0],
-    4:[0,1,0],5:[0,1,0],6:[0,1,0],
-    7:[0,0,1],8:[0,0,1],9:[0,0,1],
-    10:[.5,.5,0],11:[0,.5,.5],
-    12:[.5,0,.5],13:[.7,.3,0]
-})
-VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13,98,93]
-NEIGH       = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+            while burn.any() and minutes < MAX_SIM_MIN:
+                new, feats, cells = burn.copy(), [], []
+                for y,x in zip(*np.where(burn==1)):
+                    new[y,x] = 2
+                    for dy,dx in NEIGH:
+                        ny,nx = y+dy, x+dx
+                        if not(0<=ny<rows and 0<=nx<cols): continue
+                        if burn[ny,nx] != 0 or fuel[ny,nx] in [93,98,99]: continue
+                        feats.append(FUEL_EMB[int(fuel[ny,nx])] + [
+                            slope[ny,nx]/60, MOIST_GLOBAL/40, WIND_SPEED/30,
+                            wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
+                            (DIAG if dy*dx else CELL)/DIAG])
+                        cells.append((ny,nx))
+                if feats:
+                    for (ny,nx),p in zip(cells,predict(net,feats)):
+                        if random.random() < p: new[ny,nx] = 1
+                burn, minutes = new, minutes+STEP_MIN
+                runs.append((minutes,burn.copy()))
 
-if st.button("Train Model and Run Simulation"):
-    # prepare raster paths
-    downloaded = []
-    if slope_file:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-        tmp.write(slope_file.read()); tmp.close()
-        slope_path = tmp.name
-    else:
-        slope_path = download(slope_url); downloaded.append(slope_path)
-    if fuel_file:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-        tmp.write(fuel_file.read()); tmp.close()
-        fuel_path = tmp.name
-    else:
-        fuel_path = download(fuel_url); downloaded.append(fuel_path)
+        arrival = np.full((rows,cols), np.nan)
+        for i,(m,b) in enumerate(runs):
+            arrival[(b==2) & np.isnan(arrival)] = i+1
 
-    # Train SpreadNet
-    with st.spinner("Training SpreadNet..."):
-        X, Y = generate_balanced_samples(N_SAMPLES, SEED, VALID_FUELS, FUEL_EMB)
-        net = build_spreadnet()
-        net.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        net.fit(X, Y, epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=0)
-        st.success("Model trained!")
-
-    # Run simulation
-    with st.spinner("Running simulation..."):
-        slope, transform, (rows, cols) = load_raster(slope_path)
-        fuel , _, _        = load_raster(fuel_path)
-
-        if slope.max() > 90:
-            slope = np.degrees(np.arctan(slope / 100))
-        slope = np.clip(slope, 0, 60)
-        CELL = transform.a
-        DIAG = CELL * math.sqrt(2)
-
-        burn = np.zeros((rows, cols), np.int8)
-        burn[rows//2, cols//2] = 1
-        minutes = 0
-        runs = []
-
-        while burn.any() and minutes < MAX_SIM_MIN:
-            new   = burn.copy()
-            feats = []
-            cells = []
-            for y, x in zip(*np.where(burn == 1)):
-                new[y, x] = 2
-                for dy, dx in NEIGH:
-                    ny, nx = y+dy, x+dx
-                    if not (0 <= ny < rows and 0 <= nx < cols): continue
-                    if burn[ny, nx] != 0: continue
-                    if fuel[ny, nx] in [93, 98, 99]: continue
-                    emb  = FUEL_EMB[int(fuel[ny, nx])]
-                    feat = emb + [
-                        slope[ny, nx]/60,
-                        MOIST_GLOBAL/40,
-                        WIND_SPEED/30,
-                        wind_align_deg(WIND_DIR_DEG, direction_deg(y, x, ny, nx)),
-                        (DIAG if dy*dx else CELL)/DIAG
-                    ]
-                    feats.append(feat)
-                    cells.append((ny, nx))
-            if feats:
-                probs = predict_prob_batch(net, feats)
-                for (ny, nx), p in zip(cells, probs):
-                    if random.random() < p:
-                        new[ny, nx] = 1
-            burn = new
-            minutes += STEP_MIN
-            runs.append((minutes, burn.copy()))
-
-        arrival = np.full((rows, cols), np.nan)
-        for i, (_, b) in enumerate(runs):
-            arrival[(b == 2) & np.isnan(arrival)] = i + 1
-
-        # Plot
-        fig, ax = plt.subplots(figsize=(8, 8))
-        xmin, xmax = transform.c, transform.c + CELL * cols
-        ymin, ymax = transform.f + transform.e * rows, transform.f
-        ax.imshow(fuel, cmap='gray_r', extent=[xmin, xmax, ymin, ymax], origin='upper')
-        im = ax.imshow(arrival, cmap=get_cmap('plasma', len(runs)),
-                       extent=[xmin, xmax, ymin, ymax], origin='upper',
-                       vmin=1, vmax=len(runs), alpha=0.75)
+        xmin,xmax = transform.c, transform.c+CELL*cols
+        ymin,ymax = transform.f+transform.e*rows, transform.f
+        fig,ax = plt.subplots(figsize=(8,8))
+        ax.imshow(fuel,cmap='gray_r',extent=[xmin,xmax,ymin,ymax],origin='upper')
+        im = ax.imshow(arrival,cmap=get_cmap('plasma',len(runs)),
+                       extent=[xmin,xmax,ymin,ymax],origin='upper',
+                       vmin=1,vmax=len(runs),alpha=.75)
         ax.set_title("Fire Arrival Time (min)")
         ax.axis('off')
-        cbar = fig.colorbar(im, ax=ax, ticks=[1, len(runs)])
-        cbar.ax.set_yticklabels([f"{runs[0][0]} min", f"{runs[-1][0]} min"])
+        cbar = fig.colorbar(im,ax=ax,ticks=[1,len(runs)])
+        cbar.ax.set_yticklabels([f"{runs[0][0]} min",f"{runs[-1][0]} min"])
         st.pyplot(fig)
         st.success("Simulation complete!")
 
-    # cleanup downloaded files
-    for f in downloaded:
-        try: os.remove(f)
-        except: pass
+    finally:
+        for p in [slope_path, fuel_path]:
+            try: os.remove(p)
+            except: pass
 
 
 
