@@ -753,6 +753,8 @@ if st.button("Run Simulation"):
         # ------------------- TRAIN DUMMY NET -------------
         rnd_X = np.random.rand(60000,8).astype('float32')
         rnd_Y = np.random.randint(0,2,60000).astype('float32')
+        tf.keras.backend.clear_session()          # ← reset graph so reruns are clean
+
         net = build_spreadnet()
         net.compile(optimizer='adam', loss='binary_crossentropy')
         net.fit(rnd_X, rnd_Y, epochs=1, batch_size=2048, verbose=0)
@@ -776,6 +778,8 @@ if st.button("Run Simulation"):
                         (DIAG if dy*dx else CELL)/DIAG])
                     cells.append((ny,nx))
             if feats:
+                
+                        
                 probs = predict(net, feats)
                 for (ny,nx),p in zip(cells, probs):
                     if random.random() < p: new[ny,nx] = 1
