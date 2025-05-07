@@ -618,9 +618,19 @@ if st.button("Run Simulation"):
                             wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
                             (DIAG if dy*dx else CELL)/DIAG])
                         cells.append((ny,nx))
+                # if feats:
+                #     for (ny,nx),p in zip(cells,predict(net,feats)):
+                #         if random.random() < p: new[ny,nx] = 1
                 if feats:
-                    for (ny,nx),p in zip(cells,predict(net,feats)):
-                        if random.random() < p: new[ny,nx] = 1
+                            
+                            feats_np = np.asarray(feats, 'float32')
+                            if feats_np.shape[0] > 0:
+                                probs = predict(net, feats_np)
+                                for (ny, nx), p in zip(cells, probs):
+                                    if random.random() < p:
+                                        new[ny, nx] = 1
+
+                        
                 burn, minutes = new, minutes+STEP_MIN
                 runs.append((minutes,burn.copy()))
 
