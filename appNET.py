@@ -724,8 +724,57 @@ def predict(net, feats): return net(np.asarray(feats,'float32'), training=False)
 # -------------------------------------------------------------------
 # STREAMLIT UI
 # -------------------------------------------------------------------
-st.title("🔥 SpreadNet Fire-Spread Simulation")
+st.title("🔥 SpreadNet")
+st.write("""
+### 🔥 How SpreadNet Works
 
+SpreadNet replaces hand-crafted equations with a trained neural network to decide if fire spreads to a neighboring cell.
+
+At each time step, for each unburned neighbor, the model takes in:
+
+- 3 fuel type embedding values
+- Slope (normalized)
+- Moisture (normalized)
+- Wind speed (normalized)
+- Wind alignment: cos(θ) between wind and spread direction
+- Distance: straight or diagonal
+
+---
+
+Instead of computing:
+
+    P(spread) = 1 - exp(-ROS × Δt / d)
+
+SpreadNet **learns** spread probability directly from data by asking:
+
+> “Given these inputs, should the fire spread here?”
+
+---
+
+### 🌬️ Wind in the Model
+
+Wind is modeled with:
+- **Wind speed** (0–1 scale)
+- **Wind alignment** (cosine of the angle between wind direction and spread direction)
+
+This allows the model to:
+- Favor fire spread in tailwind directions
+- Suppress spread under headwind conditions
+- Learn subtle interactions (e.g., wind affects grass differently than timber)
+
+---
+
+### Why Use a Neural Network?
+
+- Captures nonlinear relationships
+- No need to manually tune multipliers
+- However Less transparent than physics-based models
+
+Both models simulate fire on a grid, but:
+- The **ROS model** uses fixed rules.
+- **SpreadNet** learns its rules from examples.
+
+""")
 MOIST_GLOBAL = st.slider("Global Moisture (%)", 0.0, 40.0, 1.0, .1)
 WIND_SPEED   = st.slider("Wind Speed (m/s)",    0.0, 30.0, 10.0, .1)
 WIND_DIR_DEG = st.slider("Wind Direction (°)",      0, 359, 250, 1)
