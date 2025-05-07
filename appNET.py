@@ -794,8 +794,8 @@ if st.button("Run Simulation"):
         st.pyplot(fig)
         st.success("Simulation complete!")
 
-    finally:
-        for p in [slope_path, fuel_path]:
-            try: os.remove(p)
-            except: pass
+    # finally:
+    #     for p in [slope_path, fuel_path]:
+    #         try: os.remove(p)
+    #         except: pass
 
