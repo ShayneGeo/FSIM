@@ -762,7 +762,7 @@ if st.button("Run Simulation"):
 
         # ---------- TRAIN DUMMY NET (wind-aware) ----------
 
-            
+
 
 
 def make_sample(label):
