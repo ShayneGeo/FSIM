@@ -726,13 +726,13 @@ def predict(net, feats): return net(np.asarray(feats,'float32'), training=False)
 # -------------------------------------------------------------------
 st.title("🔥 SpreadNet")
 st.write("""
-### 🔥 How SpreadNet Works
+### How it works
 
-SpreadNet replaces hand-crafted equations with a trained neural network to decide if fire spreads to a neighboring cell.
+SpreadNet replaces  equations with a trained neural network to decide if fire spreads to a neighboring cell.
 
 At each time step, for each unburned neighbor, the model takes in:
 
-- 3 fuel type embedding values
+- Fuel type embedding values
 - Slope (normalized)
 - Moisture (normalized)
 - Wind speed (normalized)
