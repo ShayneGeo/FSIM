@@ -656,9 +656,9 @@
 #         for p in [slope_path, fuel_path]:
 #             try: os.remove(p)
 #             except: pass
+# I THINK THAT ONE WAS PRETTY GOOD
 
-
-
+# TEST
 # #!/usr/bin/env python
 # # -------------------------------------------------
 # # SpreadNet Fire-Spread Streamlit App (robust)
@@ -1254,143 +1254,307 @@
 #                 except: pass
 
 
+# THIS WORKE DUB TIS A BIT OK
+# # requirements: streamlit, numpy, rasterio, scipy, tensorflow, matplotlib
+# import streamlit as st, numpy as np, rasterio, tensorflow as tf
+# from scipy.ndimage import binary_dilation
+# import matplotlib.pyplot as plt, math, tempfile, requests, os, random
+# from matplotlib.cm import get_cmap
+# from collections import defaultdict
+
+# # ─── constants ───────────────────────────────────────────────────────
+# SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+# FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+# CELL_M    = 30.0                           # cell size (m)
+
+# VALID = [1,2,3,4,5,6,7,8,9,10,11,12,13]
+# EMB = defaultdict(lambda:[0,0,0], {
+#     1:[1,0,0],2:[1,0,0],3:[1,0,0],
+#     4:[0,1,0],5:[0,1,0],6:[0,1,0],
+#     7:[0,0,1],8:[0,0,1],9:[0,0,1],
+#     10:[.5,.5,0],11:[0,.5,.5],
+#     12:[.5,0,.5],13:[.7,.3,0]})
+# NONBURN = (93,98,99)
+# ROS_FUEL = defaultdict(lambda:5., {1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
+#                                    8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
+# WIND_C, SLOPE_C = 0.23, 0.40
+
+# # ─── utility helpers ────────────────────────────────────────────────
+# def tif(url):
+#     r = requests.get(url,stream=True); r.raise_for_status()
+#     f = tempfile.NamedTemporaryFile(delete=False,suffix='.tif')
+#     for c in r.iter_content(1024*1024): f.write(c)
+#     f.close(); return f.name
+
+# def load(path):
+#     with rasterio.open(path) as s:
+#         arr = s.read(1).astype('float32')
+#         return arr, s.transform, s.shape
+
+# def build_net():
+#     return tf.keras.Sequential([
+#         tf.keras.layers.Input((8,)),
+#         tf.keras.layers.Dense(32,'relu'),
+#         tf.keras.layers.Dense(16,'relu'),
+#         tf.keras.layers.Dense(1,'sigmoid')
+#     ])
+
+# # ─── Streamlit UI ───────────────────────────────────────────────────
+# st.title("🔥 SpreadNet – fast front-propagation")
+
+# moist = st.slider("Fuel moisture (%)",0.,40.,1.,.1)
+# wind  = st.slider("Wind speed (m s⁻¹)",0.,30.,10.,.1)
+# wdir  = st.slider("Wind dir (°-from-N)",0,359,250,1)
+# dt    = st.slider("Δt (min)",1,60,10,1)
+# t_max = st.slider("Max time (min)",60,3000,480,10)
+
+# if st.button("Run"):
+#     slope_path = fuel_path = None
+#     try:
+#         slope_path, fuel_path = tif(SLOPE_URL), tif(FUEL_URL)
+#         slope, tr, (rows,cols) = load(slope_path)
+#         fuel , _ , _            = load(fuel_path)
+
+#         slope = np.degrees(np.arctan(slope/100)) if slope.max()>90 else slope
+#         slope = np.clip(slope,0,60)
+
+#         # ── initialise / cache NN once ───────────────────────────
+#         if 'net' not in st.session_state:
+#             net = build_net()
+#             net.compile(optimizer='adam', loss='binary_crossentropy')
+#             net.fit(np.random.rand(2048,8), np.random.randint(0,2,2048),
+#                     epochs=1,batch_size=256,verbose=0)
+#             st.session_state['net'] = net
+#         net = st.session_state['net']
+
+#         # ── structuring element for dilation (single global) ─────
+#         ros_max = max(ROS_FUEL.values()) + WIND_C*wind + SLOPE_C
+#         rad_px  = int(np.ceil((ros_max*dt)/CELL_M))
+#         yy,xs = np.ogrid[-rad_px:rad_px+1,-rad_px:rad_px+1]
+#         disk   = (yy**2 + xs**2) <= rad_px**2
+
+#         burn = np.zeros((rows,cols),np.int8)
+#         burn[rows//2, cols//2] = 1
+#         mins, hist = 0, []
+
+#         y_all,x_all = np.indices((rows,cols))  # for vector maths
+
+#         while burn.any() and mins < t_max:
+#             # front = flaming cells dilated by disk
+#             front = binary_dilation(burn==1, structure=disk)
+#             front &= (burn==0)
+
+#             fy, fx = np.where(front)
+#             if fy.size:
+#                 # build features for ALL front pixels in vectorised form
+#                 emb   = np.asarray([EMB[int(c)] for c in fuel[fy,fx]])
+#                 diag  = ((fy%rows)!=0)&((fx%cols)!=0)  # quick diag flag
+#                 feats = np.column_stack([
+#                     emb,
+#                     slope[fy,fx]/60,
+#                     np.full(fy.shape, moist/40,'float32'),
+#                     np.full(fy.shape, wind/30 ,'float32'),
+#                     np.cos(np.deg2rad(wdir -
+#                         np.degrees(np.arctan2(fx-cols//2, fy-rows//2)))),
+#                     diag.astype('float32')
+#                 ]).astype('float32')
+
+#                 p = net(feats,training=False).numpy().ravel()
+#                 ignite = np.random.random(p.size) < p
+#                 ny, nx = fy[ignite], fx[ignite]
+#                 burn[ny,nx] = 1
+
+#             burn[burn==1] = 2          # flaming → burned
+#             mins += dt
+#             hist.append((mins,burn.copy()))
+
+#         # ── arrival map ───────────────────────────────────────────
+#         arr = np.full((rows,cols),np.nan)
+#         for i,(m,b) in enumerate(hist,1):
+#             arr[(b==2)&np.isnan(arr)] = i
+
+#         xmin,xmax = tr.c, tr.c+tr.a*cols
+#         ymin,ymax = tr.f+tr.e*rows, tr.f
+#         fig,ax=plt.subplots(figsize=(8,8))
+#         ax.imshow(fuel,cmap='gray_r',extent=[xmin,xmax,ymin,ymax],origin='upper')
+#         im=ax.imshow(arr,cmap=get_cmap('plasma',len(hist)),
+#                      extent=[xmin,xmax,ymin,ymax],origin='upper',
+#                      vmin=1,vmax=len(hist),alpha=.75)
+#         ax.axis('off')
+#         cb=fig.colorbar(im,ax=ax,ticks=[1,len(hist)])
+#         cb.ax.set_yticklabels([f"{hist[0][0]} min",f"{hist[-1][0]} min"])
+#         st.pyplot(fig)
+#         st.success(f"Done – {len(hist)} steps ({mins} min simulated)")
+
+#     finally:
+#         for p in (slope_path,fuel_path):
+#             if p and os.path.isfile(p): os.remove(p)
+
+
 
 # requirements: streamlit, numpy, rasterio, scipy, tensorflow, matplotlib
-import streamlit as st, numpy as np, rasterio, tensorflow as tf
+import streamlit as st
+import numpy as np
+import rasterio
+import tensorflow as tf
 from scipy.ndimage import binary_dilation
-import matplotlib.pyplot as plt, math, tempfile, requests, os, random
+import matplotlib.pyplot as plt
+import math, tempfile, requests, os, random
 from matplotlib.cm import get_cmap
 from collections import defaultdict
 
 # ─── constants ───────────────────────────────────────────────────────
 SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
 FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
-CELL_M    = 30.0                           # cell size (m)
+CELL_M    = 30.0  # pixel size in meters
 
-VALID = [1,2,3,4,5,6,7,8,9,10,11,12,13]
-EMB = defaultdict(lambda:[0,0,0], {
+VALID    = [1,2,3,4,5,6,7,8,9,10,11,12,13]
+EMB      = defaultdict(lambda:[0,0,0], {
     1:[1,0,0],2:[1,0,0],3:[1,0,0],
     4:[0,1,0],5:[0,1,0],6:[0,1,0],
     7:[0,0,1],8:[0,0,1],9:[0,0,1],
     10:[.5,.5,0],11:[0,.5,.5],
     12:[.5,0,.5],13:[.7,.3,0]})
 NONBURN = (93,98,99)
-ROS_FUEL = defaultdict(lambda:5., {1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
-                                   8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
-WIND_C, SLOPE_C = 0.23, 0.40
+ROS_FUEL = defaultdict(lambda:5.0, {
+    1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
+    8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
+WIND_C, SLOPE_C = 0.23, 0.40  # m/min per (m/s wind), m/min per tan(slope)
 
-# ─── utility helpers ────────────────────────────────────────────────
+# ─── helpers ─────────────────────────────────────────────────────────
 def tif(url):
-    r = requests.get(url,stream=True); r.raise_for_status()
-    f = tempfile.NamedTemporaryFile(delete=False,suffix='.tif')
-    for c in r.iter_content(1024*1024): f.write(c)
-    f.close(); return f.name
+    r = requests.get(url, stream=True)
+    r.raise_for_status()
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+    for chunk in r.iter_content(1024*1024):
+        f.write(chunk)
+    f.close()
+    return f.name
 
 def load(path):
-    with rasterio.open(path) as s:
-        arr = s.read(1).astype('float32')
-        return arr, s.transform, s.shape
+    with rasterio.open(path) as src:
+        arr = src.read(1).astype("float32")
+        return arr, src.transform, src.shape
 
 def build_net():
-    return tf.keras.Sequential([
+    m = tf.keras.Sequential([
         tf.keras.layers.Input((8,)),
-        tf.keras.layers.Dense(32,'relu'),
-        tf.keras.layers.Dense(16,'relu'),
-        tf.keras.layers.Dense(1,'sigmoid')
+        tf.keras.layers.Dense(32, activation="relu"),
+        tf.keras.layers.Dense(16, activation="relu"),
+        tf.keras.layers.Dense(1,  activation="sigmoid"),
     ])
+    m.compile(optimizer="adam", loss="binary_crossentropy")
+    return m
 
-# ─── Streamlit UI ───────────────────────────────────────────────────
-st.title("🔥 SpreadNet – fast front-propagation")
+# ─── UI ───────────────────────────────────────────────────────────────
+st.title("🔥 SpreadNet – Wind-Oriented Front Propagation")
 
-moist = st.slider("Fuel moisture (%)",0.,40.,1.,.1)
-wind  = st.slider("Wind speed (m s⁻¹)",0.,30.,10.,.1)
-wdir  = st.slider("Wind dir (°-from-N)",0,359,250,1)
-dt    = st.slider("Δt (min)",1,60,10,1)
-t_max = st.slider("Max time (min)",60,3000,480,10)
+moist = st.slider("Fuel moisture (%)",  0.0, 40.0, 1.0, 0.1)
+wind  = st.slider("Wind speed (m/s)",   0.0, 30.0, 10.0, 0.1)
+wdir  = st.slider("Wind dir (° from N)", 0, 359, 250, 1)
+dt    = st.slider("Δt (min)",            1, 60, 10, 1)
+tmax  = st.slider("Max time (min)",    60, 3000, 480, 10)
 
-if st.button("Run"):
+if st.button("Run Simulation"):
     slope_path = fuel_path = None
     try:
+        # ─── load rasters ───────────────────────────────────────
         slope_path, fuel_path = tif(SLOPE_URL), tif(FUEL_URL)
         slope, tr, (rows,cols) = load(slope_path)
-        fuel , _ , _            = load(fuel_path)
+        fuel,  _,   _          = load(fuel_path)
 
-        slope = np.degrees(np.arctan(slope/100)) if slope.max()>90 else slope
-        slope = np.clip(slope,0,60)
+        # convert percent-slope → degrees if needed
+        if slope.max() > 90:
+            slope = np.degrees(np.arctan(slope/100.0))
+        slope = np.clip(slope, 0, 60)
 
-        # ── initialise / cache NN once ───────────────────────────
-        if 'net' not in st.session_state:
+        # ─── init or reuse neural net ───────────────────────────
+        if "net" not in st.session_state:
             net = build_net()
-            net.compile(optimizer='adam', loss='binary_crossentropy')
-            net.fit(np.random.rand(2048,8), np.random.randint(0,2,2048),
-                    epochs=1,batch_size=256,verbose=0)
-            st.session_state['net'] = net
-        net = st.session_state['net']
+            # dummy train to init weights
+            X0 = np.random.rand(2048,8).astype("float32")
+            y0 = np.random.randint(0,2,2048).astype("float32")
+            net.fit(X0, y0, epochs=1, batch_size=256, verbose=0)
+            st.session_state.net = net
+        net = st.session_state.net
 
-        # ── structuring element for dilation (single global) ─────
-        ros_max = max(ROS_FUEL.values()) + WIND_C*wind + SLOPE_C
-        rad_px  = int(np.ceil((ros_max*dt)/CELL_M))
-        yy,xs = np.ogrid[-rad_px:rad_px+1,-rad_px:rad_px+1]
-        disk   = (yy**2 + xs**2) <= rad_px**2
+        # ─── build wind-oriented ellipse SE ─────────────────────
+        # maximum possible ROS (m/min) for any fuel+slope
+        max_slope = np.tan(np.deg2rad(slope.max()))
+        ros_dw = max(ROS_FUEL.values()) + WIND_C*wind + SLOPE_C*max_slope
+        ros_cw = max(ROS_FUEL.values()) +             SLOPE_C*max_slope
+        # radii in pixels
+        a = (ros_dw * dt) / CELL_M
+        b = (ros_cw * dt) / CELL_M
+        theta = np.deg2rad(wdir)
+        rad = int(np.ceil(max(a,b)))
+        yy, xx = np.ogrid[-rad:rad+1, -rad:rad+1]
+        # rotate coords
+        xr =  xx*np.cos(theta) + yy*np.sin(theta)
+        yr = -xx*np.sin(theta) + yy*np.cos(theta)
+        ellipse = (xr/a)**2 + (yr/b)**2 <= 1
 
-        burn = np.zeros((rows,cols),np.int8)
-        burn[rows//2, cols//2] = 1
-        mins, hist = 0, []
+        # ─── simulate ────────────────────────────────────────────
+        burn = np.zeros((rows,cols), np.int8)
+        burn[rows//2, cols//2] = 1  # ignition at center
+        elapsed, history = 0, []
 
-        y_all,x_all = np.indices((rows,cols))  # for vector maths
-
-        while burn.any() and mins < t_max:
-            # front = flaming cells dilated by disk
-            front = binary_dilation(burn==1, structure=disk)
-            front &= (burn==0)
-
+        while burn.any() and elapsed < tmax:
+            # grow the front by the oriented ellipse
+            front = binary_dilation(burn==1, structure=ellipse) & (burn==0)
             fy, fx = np.where(front)
+
             if fy.size:
-                # build features for ALL front pixels in vectorised form
-                emb   = np.asarray([EMB[int(c)] for c in fuel[fy,fx]])
-                diag  = ((fy%rows)!=0)&((fx%cols)!=0)  # quick diag flag
+                # build features vectorized for all front pixels
+                emb = np.asarray([ EMB[int(c)] for c in fuel[fy,fx] ], "float32")
+                # slope, moisture, wind, alignment, diagonal flag
+                diag = ((fy % rows)!=0) & ((fx % cols)!=0)
+                align = np.cos(
+                    np.deg2rad(wdir - 
+                        np.degrees(np.arctan2(fx-cols//2, fy-rows//2)))
+                )
                 feats = np.column_stack([
                     emb,
-                    slope[fy,fx]/60,
-                    np.full(fy.shape, moist/40,'float32'),
-                    np.full(fy.shape, wind/30 ,'float32'),
-                    np.cos(np.deg2rad(wdir -
-                        np.degrees(np.arctan2(fx-cols//2, fy-rows//2)))),
-                    diag.astype('float32')
-                ]).astype('float32')
+                    slope[fy,fx]/60.0,
+                    np.full(fy.shape, moist/40.0, "float32"),
+                    np.full(fy.shape, wind /30.0,  "float32"),
+                    align.astype("float32"),
+                    diag.astype("float32"),
+                ]).astype("float32")
 
-                p = net(feats,training=False).numpy().ravel()
-                ignite = np.random.random(p.size) < p
+                p = net(feats, training=False).numpy().ravel()
+                ignite = (np.random.rand(p.size) < p)
                 ny, nx = fy[ignite], fx[ignite]
-                burn[ny,nx] = 1
+                burn[ny, nx] = 1
 
-            burn[burn==1] = 2          # flaming → burned
-            mins += dt
-            hist.append((mins,burn.copy()))
+            # move flaming → burned, advance time
+            burn[burn==1] = 2
+            elapsed += dt
+            history.append((elapsed, burn.copy()))
 
-        # ── arrival map ───────────────────────────────────────────
-        arr = np.full((rows,cols),np.nan)
-        for i,(m,b) in enumerate(hist,1):
-            arr[(b==2)&np.isnan(arr)] = i
+        # ─── arrival time map ────────────────────────────────────
+        arrival = np.full((rows,cols), np.nan)
+        for i,(t, bmap) in enumerate(history, start=1):
+            arrival[(bmap==2)&np.isnan(arrival)] = i
 
-        xmin,xmax = tr.c, tr.c+tr.a*cols
-        ymin,ymax = tr.f+tr.e*rows, tr.f
-        fig,ax=plt.subplots(figsize=(8,8))
-        ax.imshow(fuel,cmap='gray_r',extent=[xmin,xmax,ymin,ymax],origin='upper')
-        im=ax.imshow(arr,cmap=get_cmap('plasma',len(hist)),
-                     extent=[xmin,xmax,ymin,ymax],origin='upper',
-                     vmin=1,vmax=len(hist),alpha=.75)
-        ax.axis('off')
-        cb=fig.colorbar(im,ax=ax,ticks=[1,len(hist)])
-        cb.ax.set_yticklabels([f"{hist[0][0]} min",f"{hist[-1][0]} min"])
+        # ─── plot ────────────────────────────────────────────────
+        xmin,xmax = tr.c, tr.c + tr.a*cols
+        ymin,ymax = tr.f + tr.e*rows, tr.f
+        fig,ax = plt.subplots(figsize=(8,8))
+        ax.imshow(fuel, cmap="gray_r",
+                  extent=[xmin,xmax,ymin,ymax], origin="upper")
+        im = ax.imshow(arrival, cmap=get_cmap("plasma", len(history)),
+                       extent=[xmin,xmax,ymin,ymax], origin="upper",
+                       vmin=1, vmax=len(history), alpha=0.75)
+        ax.axis("off")
+        cb = fig.colorbar(im, ax=ax, ticks=[1, len(history)])
+        cb.ax.set_yticklabels([f"{history[0][0]} min", f"{history[-1][0]} min"])
         st.pyplot(fig)
-        st.success(f"Done – {len(hist)} steps ({mins} min simulated)")
+        st.success(f"Done – {len(history)} steps (~{elapsed} min)")
 
     finally:
-        for p in (slope_path,fuel_path):
-            if p and os.path.isfile(p): os.remove(p)
-
-
-
+        for p in (slope_path, fuel_path):
+            if p and os.path.isfile(p):
+                os.remove(p)
 
 
