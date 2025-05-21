@@ -5,3 +5,4 @@ matplotlib
 shapely
 requests
 tensorflow
+scipy
