@@ -1187,42 +1187,42 @@ if st.button("Run Simulation"):
                 if fuelcode in (93,98,99):          # water / barren
                     continue
 
-        # ---------------- Rate-of-Spread -----------------
-        ros = (ROS_FUEL[fuelcode] +
-               WIND_C  * WIND_SPEED +
-               SLOPE_C * np.tan(np.radians(slope[y,x])))
-        ros = np.clip(ros, 0.01, 200)       # m/min
-        reach_pix = ros * STEP_MIN / CELL_M # how many pixels?
+            # ---------------- Rate-of-Spread -----------------
+            ros = (ROS_FUEL[fuelcode] +
+                   WIND_C  * WIND_SPEED +
+                   SLOPE_C * np.tan(np.radians(slope[y,x])))
+            ros = np.clip(ros, 0.01, 200)       # m/min
+            reach_pix = ros * STEP_MIN / CELL_M # how many pixels?
+    
+            # disk mask: distance from (y,x)
+            mask = ( (yy - y)**2 + (xx - x)**2 ) <= reach_pix**2
+            cand_y, cand_x = np.where(mask & (burn==0))
+    
+            # ---- build NN feature vectors for all candidates
+            for ny,nx in zip(cand_y, cand_x):
+                if fuel[ny,nx] in (93,98,99):     # skip non-burnables
+                    continue
+                tgt_y.append(ny);  tgt_x.append(nx)
+                feats.append( FUEL_EMB[int(fuel[ny,nx])] + [
+                    slope[ny,nx]/60,
+                    MOIST_GLOBAL/40,
+                    WIND_SPEED/30,
+                    wind_align(WIND_DIR_DEG,
+                               direction_deg(y,x,ny,nx)),
+                    int((y!=ny) and (x!=nx))      # 1 if diagonal
+                ])
 
-        # disk mask: distance from (y,x)
-        mask = ( (yy - y)**2 + (xx - x)**2 ) <= reach_pix**2
-        cand_y, cand_x = np.where(mask & (burn==0))
-
-        # ---- build NN feature vectors for all candidates
-        for ny,nx in zip(cand_y, cand_x):
-            if fuel[ny,nx] in (93,98,99):     # skip non-burnables
-                continue
-            tgt_y.append(ny);  tgt_x.append(nx)
-            feats.append( FUEL_EMB[int(fuel[ny,nx])] + [
-                slope[ny,nx]/60,
-                MOIST_GLOBAL/40,
-                WIND_SPEED/30,
-                wind_align(WIND_DIR_DEG,
-                           direction_deg(y,x,ny,nx)),
-                int((y!=ny) and (x!=nx))      # 1 if diagonal
-            ])
-
-    # ========== ignite targets probabilistically ==========
-    if feats:
-        probs = predict(net, feats)
-        for (ny,nx), p in zip(zip(tgt_y, tgt_x), probs):
-            if random.random() < p:
-                new[ny,nx] = 1               # becomes flaming
-
-    # update fire states
-    new[burn==1] = 2                         # flaming → burned
-    burn, minutes = new, minutes + STEP_MIN
-    runs.append((minutes, burn.copy()))
+        # ========== ignite targets probabilistically ==========
+        if feats:
+            probs = predict(net, feats)
+            for (ny,nx), p in zip(zip(tgt_y, tgt_x), probs):
+                if random.random() < p:
+                    new[ny,nx] = 1               # becomes flaming
+    
+        # update fire states
+        new[burn==1] = 2                         # flaming → burned
+        burn, minutes = new, minutes + STEP_MIN
+        runs.append((minutes, burn.copy()))
 
 
         # ------------------- ARRIVAL MAP -----------------
