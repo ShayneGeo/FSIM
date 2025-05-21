@@ -658,7 +658,7 @@
 #             except: pass
 # I THINK THAT ONE WAS PRETTY GOOD
 
-# TEST
+# THIS IS ITTTTT
 #!/usr/bin/env python
 # -------------------------------------------------
 # SpreadNet Fire-Spread Streamlit App (robust)
@@ -929,9 +929,155 @@ if st.button("Run Simulation"):
             if p and os.path.exists(p):
                 try: os.remove(p)
                 except: pass
+# END THIS IS ITTT
 
 
+# -------------------------------------------------
+# SpreadNet with Rate-of-Spread (ROS) Integration
+# -------------------------------------------------
+#!/usr/bin/env python
+import streamlit as st, tensorflow as tf, numpy as np, rasterio, requests, tempfile, os, math, random, heapq
+import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
+from collections import defaultdict
 
+# ─── constants ───────────────────────────────────────────────────────
+DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+
+VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13]
+FUEL_EMB = defaultdict(lambda:[0,0,0], {
+    1:[1,0,0],2:[1,0,0],3:[1,0,0],
+    4:[0,1,0],5:[0,1,0],6:[0,1,0],
+    7:[0,0,1],8:[0,0,1],9:[0,0,1],
+    10:[.5,.5,0],11:[0,.5,.5],
+    12:[.5,0,.5],13:[.7,.3,0]
+})
+# simple ROS base (m / min) for each fuel model
+FUEL_ROS = {1:1.8,2:1.8,3:1.5,4:0.6,5:0.5,6:0.4,
+            7:2.2,8:2.2,9:2.0,10:0.5,11:0.4,12:0.9,13:0.7}
+
+NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+
+# ─── utils ───────────────────────────────────────────────────────────
+def download_tif(url:str)->str:
+    r = requests.get(url,stream=True,timeout=60); r.raise_for_status()
+    tmp = tempfile.NamedTemporaryFile(delete=False,suffix=".tif")
+    for chunk in r.iter_content(1024*1024): tmp.write(chunk)
+    tmp.close()
+    with rasterio.open(tmp.name): pass
+    return tmp.name
+
+def load_raster(path):
+    with rasterio.open(path) as src:
+        a = src.read(1,masked=True)
+        return np.nan_to_num(a.filled(0)), src.transform, src.shape
+
+def build_net():
+    return tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(8,)),
+        tf.keras.layers.Dense(32,activation='relu'),
+        tf.keras.layers.Dense(16,activation='relu'),
+        tf.keras.layers.Dense(1,activation='sigmoid')
+    ])
+
+def wind_align(a,b): return math.cos(math.radians(a-b))
+def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x,ny-y))%360
+def predict(net,arr): return net(np.asarray(arr,'float32'),training=False).numpy().ravel()
+
+# ─── streamlit ui ────────────────────────────────────────────────────
+st.title("🔥 SpreadNet with Rate-of-Spread")
+st.markdown("Neural probability + physical rate model (m/min)")
+
+MOIST = st.slider("Global Moisture (%)",0.,40.,1.,.1)
+WSPD  = st.slider("Wind Speed (m/s)",0.,30.,10.,.1)
+WDIR  = st.slider("Wind Direction (°)",0,359,250,1)
+MAX_T = st.slider("Max Simulation Duration (min)",60,5000,720,10)
+
+if st.button("Run Simulation"):
+    slope_path=fuel_path=None
+    try:
+        with st.spinner("Downloading rasters…"):
+            slope_path=download_tif(DEFAULT_SLOPE_URL)
+            fuel_path =download_tif(DEFAULT_FUEL_URL)
+
+        slope,transform,(rows,cols)=load_raster(slope_path)
+        fuel ,_        ,_           =load_raster(fuel_path)
+        if slope.max()>90: slope=np.degrees(np.arctan(slope/100))
+        slope=np.clip(slope,0,60)
+        CELL,DIAG=transform.a,transform.a*math.sqrt(2)
+
+        # ─── neural network (probability) quick dummy training ──────
+        def gen_sample(lbl):
+            f=random.choice(VALID_FUELS); emb=FUEL_EMB[f]
+            if lbl:
+                s=random.uniform(30,60); m=random.uniform(0,8); w=random.uniform(8,30); a=random.uniform(0.5,1)
+            else:
+                s=random.uniform(0,15);  m=random.uniform(25,40);w=random.uniform(0,10); a=random.uniform(-1,-.3)
+            d=random.choice([0,1]); x=emb+[s/60,m/40,w/30,a,d]; return x,lbl
+        def make_data(n=60_000):
+            half=n//2
+            data=[gen_sample(1) for _ in range(half)]+[gen_sample(0) for _ in range(half)]
+            random.shuffle(data);X,Y=zip(*data)
+            return np.array(X,'float32'),np.array(Y,'float32')
+        tf.keras.backend.clear_session()
+        net=build_net();net.compile(optimizer='adam',loss='binary_crossentropy')
+        Xtr,Ytr=make_data();net.fit(Xtr,Ytr,epochs=5,batch_size=2048,verbose=0)
+
+        # ─── precompute base ROS (m/min) per cell ────────────────────
+        vec_ros=np.vectorize(lambda f: FUEL_ROS.get(int(f),0.0))
+        ros_base=vec_ros(fuel)*(1-MOIST/60)*(1+0.07*slope)   # crude moisture & slope effect
+        ros_base=np.clip(ros_base,0.01,None)
+
+        # ─── ignition / arrival time grid init ──────────────────────
+        ign=np.full((rows,cols),np.inf,'float32')
+        src_y,src_x=rows//2,cols//2
+        ign[src_y,src_x]=0.0
+        burned=np.zeros((rows,cols),np.bool_)
+        pq=[(0.0,src_y,src_x)]           # (time,y,x)
+
+        # ─── simulation loop (Dijkstra-like) ─────────────────────────
+        while pq:
+            t,y,x=heapq.heappop(pq)
+            if burned[y,x] or t>MAX_T: continue
+            burned[y,x]=True
+            base=ros_base[y,x]
+            for dy,dx in NEIGH:
+                ny,nx=y+dy,x+dx
+                if not(0<=ny<rows and 0<=nx<cols): continue
+                if burned[ny,nx] or fuel[ny,nx] in [93,98,99]: continue
+                align=wind_align(WDIR,direction_deg(y,x,ny,nx))
+                ros=base*(1+0.9*align)            # down-wind boost, up-wind slow
+                if ros<=0.01: continue
+                dist=CELL if dy==0 or dx==0 else DIAG
+                cand=t+dist/ros                   # arrival time
+                # probability check
+                feat=FUEL_EMB[int(fuel[ny,nx])]+[slope[ny,nx]/60,MOIST/40,WSPD/30,align,dist/DIAG]
+                p=predict(net,[feat])[0]
+                if random.random()>p: continue
+                if cand<ign[ny,nx]:
+                    ign[ny,nx]=cand
+                    heapq.heappush(pq,(cand,ny,nx))
+
+        # ─── plot arrival map ───────────────────────────────────────
+        arr=np.where(np.isfinite(ign),ign,np.nan)
+        xmin,xmax=transform.c,transform.c+CELL*cols
+        ymin,ymax=transform.f+transform.e*rows,transform.f
+        fig,ax=plt.subplots(figsize=(8,8))
+        ax.imshow(fuel,cmap='gray_r',extent=[xmin,xmax,ymin,ymax],origin='upper')
+        im=ax.imshow(arr,cmap=get_cmap('plasma'),extent=[xmin,xmax,ymin,ymax],
+                     origin='upper',alpha=.75)
+        ax.set_title("Fire Arrival Time (min)")
+        ax.axis('off')
+        cbar=fig.colorbar(im,ax=ax)
+        cbar.set_label("Minutes since ignition")
+        st.pyplot(fig)
+        st.success("Simulation complete!")
+    finally:
+        for p in (slope_path,fuel_path):
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except: pass
 
 
 
