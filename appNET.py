@@ -659,6 +659,291 @@
 
 
 
+# #!/usr/bin/env python
+# # -------------------------------------------------
+# # SpreadNet Fire-Spread Streamlit App (robust)
+# # -------------------------------------------------
+# import streamlit as st, tensorflow as tf, numpy as np, rasterio, requests, tempfile, os, math, random
+# import matplotlib.pyplot as plt
+# from matplotlib.cm import get_cmap
+# from collections import defaultdict
+
+# # -------------------------------------------------------------------
+# # CONSTANTS
+# # -------------------------------------------------------------------
+# DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+# DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+
+# VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13,98,93]
+# FUEL_EMB = defaultdict(lambda:[0,0,0], {
+#     1:[1,0,0],2:[1,0,0],3:[1,0,0],
+#     4:[0,1,0],5:[0,1,0],6:[0,1,0],
+#     7:[0,0,1],8:[0,0,1],9:[0,0,1],
+#     10:[.5,.5,0],11:[0,.5,.5],
+#     12:[.5,0,.5],13:[.7,.3,0]
+# })
+# NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+
+# # -------------------------------------------------------------------
+# # MINI-UTILS
+# # -------------------------------------------------------------------
+# def download_tif(url: str) -> str:
+#     """Download `url` to a temp *.tif file and return the path."""
+#     r = requests.get(url, stream=True, timeout=60)
+#     r.raise_for_status()
+#     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+#     for chunk in r.iter_content(1024 * 1024):
+#         tmp.write(chunk)
+#     tmp.close()
+#     # quick sanity-check: can rasterio open it?
+#     try:
+#         with rasterio.open(tmp.name):
+#             pass
+#     except Exception:
+#         os.remove(tmp.name)
+#         raise RuntimeError(f"Downloaded file from {url} is not a readable GeoTIFF.")
+#     return tmp.name
+
+# def load_raster(path):
+#     with rasterio.open(path) as src:
+#         arr = src.read(1, masked=True)
+#         return np.nan_to_num(arr.filled(0)), src.transform, src.shape
+
+# def build_spreadnet():
+#     return tf.keras.Sequential([
+#         tf.keras.layers.Input(shape=(8,)),
+#         tf.keras.layers.Dense(32, activation='relu'),
+#         tf.keras.layers.Dense(16, activation='relu'),
+#         tf.keras.layers.Dense(1, activation='sigmoid')
+#     ])
+
+# def wind_align(a,b): return math.cos(math.radians(a - b))
+# def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
+# def predict(net, feats): return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
+
+# # -------------------------------------------------------------------
+# # STREAMLIT UI
+# # -------------------------------------------------------------------
+# st.title("🔥 SpreadNet")
+# st.write("""
+# ### How it works
+
+# SpreadNet is a neural-network–driven cellular-automaton model that predicts wildfire spread probabilities 
+# for each neighboring cell based on fuel type, slope, moisture, wind speed, wind alignment, and distance.
+
+# SpreadNet replaces CA equations with a trained neural network to decide if fire spreads to a neighboring cell.
+
+# At each time step, for each unburned neighbor, the model takes in:
+
+# - Fuel type embedding values
+# - Slope (normalized)
+# - Moisture (normalized)
+# - Wind speed (normalized)
+# - Wind alignment: cos(θ) between wind and spread direction
+# - Distance: straight or diagonal
+
+# ---
+
+# Instead of computing:
+
+#     P(spread) = 1 - exp(-ROS × Δt / d)
+
+
+# SpreadNet **learns** the probability of fire spread directly from data by asking:
+
+#     “Given these inputs, should the fire spread here?”
+
+# This is done by training a neural network to approximate the spread probability:
+
+#     P(spread) = σ(W₂ · ReLU(W₁ · x + b₁) + b₂)
+
+# Where:
+# - x is the input feature vector, including:
+#     - fuel type,
+#     - normalized slope,
+#     - normalized moisture,
+#     - normalized wind speed,
+#     - wind alignment (cos(θ)),
+#     - and a distance flag (0 = straight, 1 = diagonal)
+# - σ is the sigmoid activation function converting logits to probability,
+# - W₁, W₂ and b₁, b₂ are the model's learned weights and biases.
+
+# Rather than using rule-based equations, SpreadNet learns a nonlinear decision surface
+# from training data that maps environmental conditions to the probability of spread.
+
+            
+# ---
+
+# ### 🌬️ Wind in the Model
+
+# Wind is modeled with:
+# - **Wind speed** (0–1 scale)
+# - **Wind alignment** (cosine of the angle between wind direction and spread direction)
+
+# This allows the model to:
+# - Favor fire spread in tailwind directions
+# - Suppress spread under headwind conditions
+# - Learn subtle interactions (e.g., wind affects grass differently than timber)
+
+# ---
+
+# ### Why Use a Neural Network?
+
+# - Captures nonlinear relationships
+# - No need to manually tune multipliers
+# - However Less transparent than physics-based models
+
+# Both models simulate fire on a grid, but:
+# - The **ROS model** uses fixed rules.
+# - **SpreadNet** learns its rules from examples.
+
+# """)
+# MOIST_GLOBAL = st.slider("Global Moisture (%)", 0.0, 40.0, 1.0, .1)
+# WIND_SPEED   = st.slider("Wind Speed (m/s)",    0.0, 30.0, 10.0, .1)
+# WIND_DIR_DEG = st.slider("Wind Direction (°)",      0, 359, 250, 1)
+# STEP_MIN     = st.slider("Time Step (min)",         1, 60, 10, 1)
+# MAX_SIM_MIN  = st.slider("Max Simulation Time (min)", 60, 5000, 2240, 10)
+
+# if st.button("Run Simulation"):
+
+#     slope_path, fuel_path = None, None
+#     try:
+#         # ------------------- DOWNLOAD -------------------
+#         with st.spinner("Downloading rasters…"):
+#             slope_path = download_tif(DEFAULT_SLOPE_URL)
+#             fuel_path  = download_tif(DEFAULT_FUEL_URL)
+
+#         # ------------------- PREP DATA -------------------
+#         slope, transform, (rows, cols) = load_raster(slope_path)
+#         fuel , _        , _            = load_raster(fuel_path)
+
+#         if slope.max() > 90:
+#             slope = np.degrees(np.arctan(slope / 100))
+#         slope = np.clip(slope, 0, 60)
+#         CELL, DIAG = transform.a, transform.a * math.sqrt(2)
+
+#         # ------------------- TRAIN DUMMY NET -------------
+#         #rnd_X = np.random.rand(60000,8).astype('float32')
+#         #rnd_Y = np.random.randint(0,2,60000).astype('float32')
+        
+#         # tf.keras.backend.clear_session()          # ← reset graph so reruns are clean
+
+#         # net = build_spreadnet()
+#         # net.compile(optimizer='adam', loss='binary_crossentropy')
+#         # net.fit(rnd_X, rnd_Y, epochs=1, batch_size=2048, verbose=0)
+
+#         # ---------- TRAIN DUMMY NET (wind-aware) ----------
+        
+
+            
+
+#         def make_sample(label):
+#             fuel_code = random.choice(VALID_FUELS)
+#             fuel_emb  = FUEL_EMB[fuel_code]
+        
+#             if label:   # spread
+#                 slope = random.uniform(30, 60)
+#                 moist = random.uniform(0, 8)
+#                 wind  = random.uniform(8, 30)
+#                 align = random.uniform(0.5, 1.0)      # tail-wind
+#             else:       # no-spread
+#                 slope = random.uniform(0, 15)
+#                 moist = random.uniform(25, 40)
+#                 wind  = random.uniform(0, 10)
+#                 align = random.uniform(-1.0, -0.3)    # head-wind
+        
+#             dist = random.choice([0, 1])
+#             x = fuel_emb + [slope/60, moist/40, wind/30, align, dist]
+#             return x, label
+        
+#         def generate_balanced_samples(n=60_000, seed=42):
+#             random.seed(seed); np.random.seed(seed)
+#             half = n // 2
+#             data = [make_sample(1) for _ in range(half)] + \
+#                    [make_sample(0) for _ in range(half)]
+#             random.shuffle(data)
+#             X, Y = zip(*data)
+#             return np.array(X, 'float32'), np.array(Y, 'float32')
+        
+#         # clear previous graph each rerun
+#         tf.keras.backend.clear_session()
+        
+#         net = build_spreadnet()
+#         net.compile(optimizer='adam', loss='binary_crossentropy')
+        
+#         X_train, y_train = generate_balanced_samples()
+#         net.fit(X_train, y_train, epochs=5, batch_size=2048, verbose=0)
+
+
+#         # ------------------- SIMULATION ------------------
+#         burn = np.zeros((rows,cols), np.int8)
+#         burn[rows//2, cols//2] = 1
+#         minutes, runs = 0, []
+
+#         while burn.any() and minutes < MAX_SIM_MIN:
+#             new, feats, cells = burn.copy(), [], []
+#             for y,x in zip(*np.where(burn==1)):
+#                 new[y,x] = 2
+#                 for dy,dx in NEIGH:
+#                     ny,nx = y+dy, x+dx
+#                     if not(0<=ny<rows and 0<=nx<cols): continue
+#                     if burn[ny,nx] != 0 or fuel[ny,nx] in [93,98,99]: continue
+#                     feats.append(FUEL_EMB[int(fuel[ny,nx])] + [
+#                         slope[ny,nx]/60, MOIST_GLOBAL/40, WIND_SPEED/30,
+#                         wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
+#                         (DIAG if dy*dx else CELL)/DIAG])
+#                     cells.append((ny,nx))
+#             if feats:
+                
+                        
+#                 probs = predict(net, feats)
+#                 for (ny,nx),p in zip(cells, probs):
+#                     if random.random() < p: new[ny,nx] = 1
+#             burn, minutes = new, minutes + STEP_MIN
+#             runs.append((minutes, burn.copy()))
+
+#         # ------------------- ARRIVAL MAP -----------------
+#         arrival = np.full((rows,cols), np.nan)
+#         for i,(_,b) in enumerate(runs):
+#             arrival[(b==2) & np.isnan(arrival)] = i + 1
+
+#         # ------------------- PLOT ------------------------
+#         xmin,xmax = transform.c, transform.c + CELL * cols
+#         ymin,ymax = transform.f + transform.e * rows, transform.f
+#         fig, ax = plt.subplots(figsize=(8,8))
+#         ax.imshow(fuel, cmap='gray_r',
+#                   extent=[xmin,xmax,ymin,ymax], origin='upper')
+#         im = ax.imshow(arrival, cmap=get_cmap('plasma', len(runs)),
+#                        extent=[xmin,xmax,ymin,ymax], origin='upper',
+#                        vmin=1, vmax=len(runs), alpha=.75)
+#         ax.set_title("Fire Arrival Time (min)")
+#         ax.axis('off')
+#         cbar = fig.colorbar(im, ax=ax, ticks=[1, len(runs)])
+#         cbar.ax.set_yticklabels([f"{runs[0][0]} min", f"{runs[-1][0]} min"])
+#         st.pyplot(fig)
+#         st.success("Simulation complete!")
+
+#     finally:
+#         # always clean up downloaded temp files
+#         for p in (slope_path, fuel_path):
+#             if p and os.path.exists(p):
+#                 try: os.remove(p)
+#                 except: pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #!/usr/bin/env python
 # -------------------------------------------------
 # SpreadNet Fire-Spread Streamlit App (robust)
@@ -875,32 +1160,70 @@ if st.button("Run Simulation"):
         net.fit(X_train, y_train, epochs=5, batch_size=2048, verbose=0)
 
 
+        # ------------------- CONSTANTS for ROS -------------
+        CELL_M  = 30.0                  # ← your request
+        # crude baseline ROS for NFDRS fuel models 1-13 (m/min)
+        ROS_FUEL = defaultdict(lambda:5, {1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
+                                          8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
+        WIND_C  = 0.23                  # m/min gain per m/s wind
+        SLOPE_C = 0.40                  # m/min gain per tan(slope)
+        
         # ------------------- SIMULATION ------------------
-        burn = np.zeros((rows,cols), np.int8)
-        burn[rows//2, cols//2] = 1
+        burn     = np.zeros((rows, cols), np.int8)
+        burn[rows//2, cols//2] = 1      # ignition
         minutes, runs = 0, []
-
+        
+        # pre-compute pixel centres for quick distance tests
+        yy, xx = np.indices(burn.shape)
+        
         while burn.any() and minutes < MAX_SIM_MIN:
-            new, feats, cells = burn.copy(), [], []
-            for y,x in zip(*np.where(burn==1)):
-                new[y,x] = 2
-                for dy,dx in NEIGH:
-                    ny,nx = y+dy, x+dx
-                    if not(0<=ny<rows and 0<=nx<cols): continue
-                    if burn[ny,nx] != 0 or fuel[ny,nx] in [93,98,99]: continue
-                    feats.append(FUEL_EMB[int(fuel[ny,nx])] + [
-                        slope[ny,nx]/60, MOIST_GLOBAL/40, WIND_SPEED/30,
-                        wind_align(WIND_DIR_DEG, direction_deg(y,x,ny,nx)),
-                        (DIAG if dy*dx else CELL)/DIAG])
-                    cells.append((ny,nx))
-            if feats:
-                
-                        
-                probs = predict(net, feats)
-                for (ny,nx),p in zip(cells, probs):
-                    if random.random() < p: new[ny,nx] = 1
-            burn, minutes = new, minutes + STEP_MIN
-            runs.append((minutes, burn.copy()))
+            new   = burn.copy()
+            ign_y, ign_x = np.where(burn==1)        # active flaming pixels
+            tgt_y, tgt_x, feats = [], [], []
+        
+            # ---- loop over *each* flaming pixel -----------------
+            for y,x in zip(ign_y, ign_x):
+                fuelcode = int(fuel[y,x])
+                if fuelcode in (93,98,99):          # water / barren
+                    continue
+
+        # ---------------- Rate-of-Spread -----------------
+        ros = (ROS_FUEL[fuelcode] +
+               WIND_C  * WIND_SPEED +
+               SLOPE_C * np.tan(np.radians(slope[y,x])))
+        ros = np.clip(ros, 0.01, 200)       # m/min
+        reach_pix = ros * STEP_MIN / CELL_M # how many pixels?
+
+        # disk mask: distance from (y,x)
+        mask = ( (yy - y)**2 + (xx - x)**2 ) <= reach_pix**2
+        cand_y, cand_x = np.where(mask & (burn==0))
+
+        # ---- build NN feature vectors for all candidates
+        for ny,nx in zip(cand_y, cand_x):
+            if fuel[ny,nx] in (93,98,99):     # skip non-burnables
+                continue
+            tgt_y.append(ny);  tgt_x.append(nx)
+            feats.append( FUEL_EMB[int(fuel[ny,nx])] + [
+                slope[ny,nx]/60,
+                MOIST_GLOBAL/40,
+                WIND_SPEED/30,
+                wind_align(WIND_DIR_DEG,
+                           direction_deg(y,x,ny,nx)),
+                int((y!=ny) and (x!=nx))      # 1 if diagonal
+            ])
+
+    # ========== ignite targets probabilistically ==========
+    if feats:
+        probs = predict(net, feats)
+        for (ny,nx), p in zip(zip(tgt_y, tgt_x), probs):
+            if random.random() < p:
+                new[ny,nx] = 1               # becomes flaming
+
+    # update fire states
+    new[burn==1] = 2                         # flaming → burned
+    burn, minutes = new, minutes + STEP_MIN
+    runs.append((minutes, burn.copy()))
+
 
         # ------------------- ARRIVAL MAP -----------------
         arrival = np.full((rows,cols), np.nan)
@@ -929,4 +1252,12 @@ if st.button("Run Simulation"):
             if p and os.path.exists(p):
                 try: os.remove(p)
                 except: pass
+
+
+
+
+
+
+
+
 
