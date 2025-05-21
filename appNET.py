@@ -1255,216 +1255,140 @@
 
 
 
-#!/usr/bin/env python
-# -------------------------------------------------
-# SpreadNet Fire-Spread Streamlit App  ·  vectorised ROS version
-# -------------------------------------------------
-import streamlit as st, tensorflow as tf, numpy as np, rasterio
-import requests, tempfile, os, math, random
-import matplotlib.pyplot as plt
+# requirements: streamlit, numpy, rasterio, scipy, tensorflow, matplotlib
+import streamlit as st, numpy as np, rasterio, tensorflow as tf
+from scipy.ndimage import binary_dilation
+import matplotlib.pyplot as plt, math, tempfile, requests, os, random
 from matplotlib.cm import get_cmap
 from collections import defaultdict
 
-# ──────────────────────────────────────────────────────────────────────
-# 1.  CONSTANTS & LOOK-UP TABLES
-# ──────────────────────────────────────────────────────────────────────
-DEFAULT_SLOPE_URL = (
-    "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
-)
-DEFAULT_FUEL_URL  = (
-    "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
-)
+# ─── constants ───────────────────────────────────────────────────────
+SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+CELL_M    = 30.0                           # cell size (m)
 
-VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13]
-FUEL_EMB = defaultdict(lambda:[0,0,0], {
+VALID = [1,2,3,4,5,6,7,8,9,10,11,12,13]
+EMB = defaultdict(lambda:[0,0,0], {
     1:[1,0,0],2:[1,0,0],3:[1,0,0],
     4:[0,1,0],5:[0,1,0],6:[0,1,0],
     7:[0,0,1],8:[0,0,1],9:[0,0,1],
     10:[.5,.5,0],11:[0,.5,.5],
-    12:[.5,0,.5],13:[.7,.3,0]
-})
-NON_BURNABLE = (93, 98, 99)          # codes to skip completely
+    12:[.5,0,.5],13:[.7,.3,0]})
+NONBURN = (93,98,99)
+ROS_FUEL = defaultdict(lambda:5., {1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
+                                   8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
+WIND_C, SLOPE_C = 0.23, 0.40
 
-# NFDRS-style crude baseline ROS (m min⁻¹)
-ROS_FUEL = defaultdict(lambda:5.0,
-                       {1:6,2:7,3:9,4:5,5:4,6:3,7:1.5,
-                        8:1.2,9:1.8,10:3,11:2,12:1.2,13:1})
+# ─── utility helpers ────────────────────────────────────────────────
+def tif(url):
+    r = requests.get(url,stream=True); r.raise_for_status()
+    f = tempfile.NamedTemporaryFile(delete=False,suffix='.tif')
+    for c in r.iter_content(1024*1024): f.write(c)
+    f.close(); return f.name
 
-CELL_METERS = 30.0           # pixel size
-WIND_C  = 0.23               # m min⁻¹ per (m s⁻¹)
-SLOPE_C = 0.40               # m min⁻¹ per tan(slope)
+def load(path):
+    with rasterio.open(path) as s:
+        arr = s.read(1).astype('float32')
+        return arr, s.transform, s.shape
 
-# ──────────────────────────────────────────────────────────────────────
-# 2.  SMALL HELPERS
-# ──────────────────────────────────────────────────────────────────────
-def download_tif(url: str) -> str:
-    """Fetch *url* to a temp file and return the path."""
-    r = requests.get(url, stream=True, timeout=60)
-    r.raise_for_status()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-    for chunk in r.iter_content(1024*1024):
-        tmp.write(chunk)
-    tmp.close()
-    # quick check it opens
-    with rasterio.open(tmp.name):
-        pass
-    return tmp.name
-
-def load_raster(path):
-    with rasterio.open(path) as src:
-        arr = src.read(1, masked=True).filled(0)
-        return arr.astype("float32"), src.transform, src.shape
-
-def build_spreadnet():
+def build_net():
     return tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(8,)),
-        tf.keras.layers.Dense(32, activation='relu'),
-        tf.keras.layers.Dense(16, activation='relu'),
-        tf.keras.layers.Dense(1,  activation='sigmoid')
+        tf.keras.layers.Input((8,)),
+        tf.keras.layers.Dense(32,'relu'),
+        tf.keras.layers.Dense(16,'relu'),
+        tf.keras.layers.Dense(1,'sigmoid')
     ])
 
-@tf.function
-def nn_predict(model, x_batch):
-    """Fast, graph-compiled forward pass."""
-    return model(x_batch, training=False)
+# ─── Streamlit UI ───────────────────────────────────────────────────
+st.title("🔥 SpreadNet – fast front-propagation")
 
-# ──────────────────────────────────────────────────────────────────────
-# 3.  STREAMLIT USER INTERFACE
-# ──────────────────────────────────────────────────────────────────────
-st.title("🔥 SpreadNet – vectorised demo")
+moist = st.slider("Fuel moisture (%)",0.,40.,1.,.1)
+wind  = st.slider("Wind speed (m s⁻¹)",0.,30.,10.,.1)
+wdir  = st.slider("Wind dir (°-from-N)",0,359,250,1)
+dt    = st.slider("Δt (min)",1,60,10,1)
+t_max = st.slider("Max time (min)",60,3000,480,10)
 
-MOIST_GLOBAL = st.slider("Global fuel moisture (%)", 0.0, 40.0, 1.0, .1)
-WIND_SPEED   = st.slider("Wind speed (m s⁻¹)",        0.0, 30.0, 10.0, .1)
-WIND_DIR_DEG = st.slider("Wind direction (° from N)",     0, 359, 250, 1)
-STEP_MIN     = st.slider("Time-step Δt (min)",            1, 60, 10, 1)
-MAX_SIM_MIN  = st.slider("Max simulated time (min)",    60, 3000, 480, 10)
-
-if st.button("Run simulation"):
+if st.button("Run"):
     slope_path = fuel_path = None
     try:
-        with st.spinner("⬇️  Downloading rasters…"):
-            slope_path = download_tif(DEFAULT_SLOPE_URL)
-            fuel_path  = download_tif(DEFAULT_FUEL_URL)
+        slope_path, fuel_path = tif(SLOPE_URL), tif(FUEL_URL)
+        slope, tr, (rows,cols) = load(slope_path)
+        fuel , _ , _            = load(fuel_path)
 
-        # ─── load & pre-process rasters ──────────────────────────────
-        slope, transform, (rows, cols) = load_raster(slope_path)
-        fuel , _        , _            = load_raster(fuel_path)
+        slope = np.degrees(np.arctan(slope/100)) if slope.max()>90 else slope
+        slope = np.clip(slope,0,60)
 
-        # convert % slope to degrees if needed
-        if slope.max() > 90:                         # heuristic
-            slope = np.degrees(np.arctan(slope / 100))
-        slope = np.clip(slope, 0, 60)
+        # ── initialise / cache NN once ───────────────────────────
+        if 'net' not in st.session_state:
+            net = build_net()
+            net.compile(optimizer='adam', loss='binary_crossentropy')
+            net.fit(np.random.rand(2048,8), np.random.randint(0,2,2048),
+                    epochs=1,batch_size=256,verbose=0)
+            st.session_state['net'] = net
+        net = st.session_state['net']
 
-        cell_size = transform.a                     # 30 m
-        yy, xx = np.indices((rows, cols))           # pixel centres
+        # ── structuring element for dilation (single global) ─────
+        ros_max = max(ROS_FUEL.values()) + WIND_C*wind + SLOPE_C
+        rad_px  = int(np.ceil((ros_max*dt)/CELL_M))
+        yy,xs = np.ogrid[-rad_px:rad_px+1,-rad_px:rad_px+1]
+        disk   = (yy**2 + xs**2) <= rad_px**2
 
-        # ─── tiny dummy-training of the NN (just to have weights) ───
-        tf.keras.backend.clear_session()
-        net = build_spreadnet()
-        net.compile(optimizer='adam', loss='binary_crossentropy')
-        net.fit(np.random.rand(1024,8), np.random.randint(0,2,1024),
-                epochs=1, batch_size=128, verbose=0)
+        burn = np.zeros((rows,cols),np.int8)
+        burn[rows//2, cols//2] = 1
+        mins, hist = 0, []
 
-        # ─── cellular automaton state arrays ─────────────────────────
-        burn = np.zeros((rows, cols), np.int8)
-        burn[rows//2, cols//2] = 1                  # ignition pixel
-        minutes, history = 0, []
+        y_all,x_all = np.indices((rows,cols))  # for vector maths
 
-        # ─── main simulation loop ────────────────────────────────────
-        while burn.any() and minutes < MAX_SIM_MIN:
-            new = burn.copy()
+        while burn.any() and mins < t_max:
+            # front = flaming cells dilated by disk
+            front = binary_dilation(burn==1, structure=disk)
+            front &= (burn==0)
 
-            # all flaming pixels
-            py, px = np.where(burn == 1)
-            if py.size == 0:
-                break
-
-            # containers for *all* candidate pixels this step
-            cand_y, cand_x, feat_rows = [], [], []
-
-            for y, x in zip(py, px):
-                fcode = int(fuel[y, x])
-                if fcode in NON_BURNABLE:
-                    continue
-
-                ros = (ROS_FUEL[fcode] +
-                       WIND_C  * WIND_SPEED +
-                       SLOPE_C * math.tan(math.radians(slope[y, x])))
-
-                radius_pix = (ros * STEP_MIN) / CELL_METERS
-                if radius_pix < 0.75:               # nothing to reach
-                    continue
-
-                mask = ((yy - y)**2 + (xx - x)**2) <= radius_pix**2
-                m_y, m_x = np.where(mask & (burn == 0))
-
-                if m_y.size == 0:
-                    continue
-
-                cand_y.append(m_y)
-                cand_x.append(m_x)
-
-                # vectorised feature construction
-                emb = np.asarray([FUEL_EMB[int(c)] for c in fuel[m_y, m_x]])
+            fy, fx = np.where(front)
+            if fy.size:
+                # build features for ALL front pixels in vectorised form
+                emb   = np.asarray([EMB[int(c)] for c in fuel[fy,fx]])
+                diag  = ((fy%rows)!=0)&((fx%cols)!=0)  # quick diag flag
                 feats = np.column_stack([
                     emb,
-                    slope[m_y, m_x] / 60.0,
-                    np.full(m_y.shape, MOIST_GLOBAL / 40.0, 'float32'),
-                    np.full(m_y.shape, WIND_SPEED / 30.0,   'float32'),
-                    np.cos(np.deg2rad(
-                        WIND_DIR_DEG -
-                        np.degrees(np.arctan2(m_x - x, m_y - y))
-                    )).astype('float32'),
-                    ((m_y != y) & (m_x != x)).astype('float32')  # diagonal flag
-                ])
-                feat_rows.append(feats)
+                    slope[fy,fx]/60,
+                    np.full(fy.shape, moist/40,'float32'),
+                    np.full(fy.shape, wind/30 ,'float32'),
+                    np.cos(np.deg2rad(wdir -
+                        np.degrees(np.arctan2(fx-cols//2, fy-rows//2)))),
+                    diag.astype('float32')
+                ]).astype('float32')
 
-            if feat_rows:
-                cand_y = np.concatenate(cand_y)
-                cand_x = np.concatenate(cand_x)
-                feat_rows = np.vstack(feat_rows).astype('float32')
+                p = net(feats,training=False).numpy().ravel()
+                ignite = np.random.random(p.size) < p
+                ny, nx = fy[ignite], fx[ignite]
+                burn[ny,nx] = 1
 
-                probs = nn_predict(net, feat_rows).numpy().ravel()
-                ignite = np.random.random(probs.shape) < probs
-                new[cand_y[ignite], cand_x[ignite]] = 1
+            burn[burn==1] = 2          # flaming → burned
+            mins += dt
+            hist.append((mins,burn.copy()))
 
-            # flaming → burned
-            new[burn == 1] = 2
-            burn, minutes = new, minutes + STEP_MIN
-            history.append((minutes, burn.copy()))
+        # ── arrival map ───────────────────────────────────────────
+        arr = np.full((rows,cols),np.nan)
+        for i,(m,b) in enumerate(hist,1):
+            arr[(b==2)&np.isnan(arr)] = i
 
-        # ─── arrival-time map ───────────────────────────────────────
-        arrival = np.full((rows, cols), np.nan)
-        for i, (t, state) in enumerate(history, 1):
-            arrival[(state == 2) & np.isnan(arrival)] = i
-
-        # ─── plotting ───────────────────────────────────────────────
-        xmin, xmax = transform.c, transform.c + cell_size*cols
-        ymin, ymax = transform.f + transform.e*rows, transform.f
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.imshow(fuel, cmap='gray_r',
-                  extent=[xmin, xmax, ymin, ymax], origin='upper')
-        im = ax.imshow(arrival, cmap=get_cmap('plasma', len(history)),
-                       extent=[xmin, xmax, ymin, ymax], origin='upper',
-                       vmin=1, vmax=len(history), alpha=.75)
-        ax.set_title("Fire arrival time (time-steps)")
+        xmin,xmax = tr.c, tr.c+tr.a*cols
+        ymin,ymax = tr.f+tr.e*rows, tr.f
+        fig,ax=plt.subplots(figsize=(8,8))
+        ax.imshow(fuel,cmap='gray_r',extent=[xmin,xmax,ymin,ymax],origin='upper')
+        im=ax.imshow(arr,cmap=get_cmap('plasma',len(hist)),
+                     extent=[xmin,xmax,ymin,ymax],origin='upper',
+                     vmin=1,vmax=len(hist),alpha=.75)
         ax.axis('off')
-        cb = fig.colorbar(im, ax=ax, ticks=[1, len(history)])
-        cb.ax.set_yticklabels([f"{history[0][0]} min",
-                               f"{history[-1][0]} min"])
+        cb=fig.colorbar(im,ax=ax,ticks=[1,len(hist)])
+        cb.ax.set_yticklabels([f"{hist[0][0]} min",f"{hist[-1][0]} min"])
         st.pyplot(fig)
-        st.success(f"Simulation finished in {len(history)} steps "
-                   f"({minutes} min).")
+        st.success(f"Done – {len(hist)} steps ({mins} min simulated)")
 
     finally:
-        # tidy tmp files
-        for p in (slope_path, fuel_path):
-            if p and os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-
+        for p in (slope_path,fuel_path):
+            if p and os.path.isfile(p): os.remove(p)
 
 
 
