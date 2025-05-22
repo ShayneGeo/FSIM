@@ -659,67 +659,67 @@
 # I THINK THAT ONE WAS PRETTY GOOD
 
 # THIS IS ITTTTT
-# #!/usr/bin/env python
-# # -------------------------------------------------
-# # SpreadNet Fire-Spread Streamlit App (robust)
-# # -------------------------------------------------
-# import streamlit as st, tensorflow as tf, numpy as np, rasterio, requests, tempfile, os, math, random
-# import matplotlib.pyplot as plt
-# from matplotlib.cm import get_cmap
-# from collections import defaultdict
+#!/usr/bin/env python
+# -------------------------------------------------
+# SpreadNet Fire-Spread Streamlit App (robust)
+# -------------------------------------------------
+import streamlit as st, tensorflow as tf, numpy as np, rasterio, requests, tempfile, os, math, random
+import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
+from collections import defaultdict
 
-# # -------------------------------------------------------------------
-# # CONSTANTS
-# # -------------------------------------------------------------------
-# DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
-# DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
+# -------------------------------------------------------------------
+# CONSTANTS
+# -------------------------------------------------------------------
+DEFAULT_SLOPE_URL = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC20_SlpD_220_SMALL2.tif"
+DEFAULT_FUEL_URL  = "https://raw.githubusercontent.com/ShayneGeo/FSIM/main/LC22_F13_230_SMALL2.tif"
 
-# VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13,98,93]
-# FUEL_EMB = defaultdict(lambda:[0,0,0], {
-#     1:[1,0,0],2:[1,0,0],3:[1,0,0],
-#     4:[0,1,0],5:[0,1,0],6:[0,1,0],
-#     7:[0,0,1],8:[0,0,1],9:[0,0,1],
-#     10:[.5,.5,0],11:[0,.5,.5],
-#     12:[.5,0,.5],13:[.7,.3,0]
-# })
-# NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+VALID_FUELS = [1,2,3,4,5,6,7,8,9,10,11,12,13,98,93]
+FUEL_EMB = defaultdict(lambda:[0,0,0], {
+    1:[1,0,0],2:[1,0,0],3:[1,0,0],
+    4:[0,1,0],5:[0,1,0],6:[0,1,0],
+    7:[0,0,1],8:[0,0,1],9:[0,0,1],
+    10:[.5,.5,0],11:[0,.5,.5],
+    12:[.5,0,.5],13:[.7,.3,0]
+})
+NEIGH = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
 
-# # -------------------------------------------------------------------
-# # MINI-UTILS
-# # -------------------------------------------------------------------
-# def download_tif(url: str) -> str:
-#     """Download `url` to a temp *.tif file and return the path."""
-#     r = requests.get(url, stream=True, timeout=60)
-#     r.raise_for_status()
-#     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-#     for chunk in r.iter_content(1024 * 1024):
-#         tmp.write(chunk)
-#     tmp.close()
-#     # quick sanity-check: can rasterio open it?
-#     try:
-#         with rasterio.open(tmp.name):
-#             pass
-#     except Exception:
-#         os.remove(tmp.name)
-#         raise RuntimeError(f"Downloaded file from {url} is not a readable GeoTIFF.")
-#     return tmp.name
+# -------------------------------------------------------------------
+# MINI-UTILS
+# -------------------------------------------------------------------
+def download_tif(url: str) -> str:
+    """Download `url` to a temp *.tif file and return the path."""
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+    for chunk in r.iter_content(1024 * 1024):
+        tmp.write(chunk)
+    tmp.close()
+    # quick sanity-check: can rasterio open it?
+    try:
+        with rasterio.open(tmp.name):
+            pass
+    except Exception:
+        os.remove(tmp.name)
+        raise RuntimeError(f"Downloaded file from {url} is not a readable GeoTIFF.")
+    return tmp.name
 
-# def load_raster(path):
-#     with rasterio.open(path) as src:
-#         arr = src.read(1, masked=True)
-#         return np.nan_to_num(arr.filled(0)), src.transform, src.shape
+def load_raster(path):
+    with rasterio.open(path) as src:
+        arr = src.read(1, masked=True)
+        return np.nan_to_num(arr.filled(0)), src.transform, src.shape
 
-# def build_spreadnet():
-#     return tf.keras.Sequential([
-#         tf.keras.layers.Input(shape=(8,)),
-#         tf.keras.layers.Dense(32, activation='relu'),
-#         tf.keras.layers.Dense(16, activation='relu'),
-#         tf.keras.layers.Dense(1, activation='sigmoid')
-#     ])
+def build_spreadnet():
+    return tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(8,)),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(16, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
 
-# def wind_align(a,b): return math.cos(math.radians(a - b))
-# def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
-# def predict(net, feats): return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
+def wind_align(a,b): return math.cos(math.radians(a - b))
+def direction_deg(y,x,ny,nx): return math.degrees(math.atan2(nx-x, ny-y))%360
+def predict(net, feats): return net(np.asarray(feats,'float32'), training=False).numpy().ravel()
 
 # -------------------------------------------------------------------
 # STREAMLIT UI
